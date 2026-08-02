@@ -18,8 +18,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Show Swift version
-        run: swift --version
+      - name: Select a Swift 6 Xcode toolchain
+        shell: bash
+        run: |
+          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' | sort | tail -n 1)"
+          if [[ -z "$xcode_path" ]]; then
+            echo "No Xcode 16 installation is available on this runner" >&2
+            exit 1
+          fi
+          sudo xcode-select --switch "$xcode_path/Contents/Developer"
+          swift --version
 
       - name: Build
         run: swift build -c debug
