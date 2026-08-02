@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-release:
     name: Build macOS arm64 release
-    runs-on: macos-15-arm64
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -53,6 +53,8 @@ jobs:
         run: swift run -c release middleai-tests
 
       - name: Build application bundle
+        env:
+          MIDDLEAI_BUILD_ARCH: arm64
         run: ./scripts/build-app.sh
 
       - name: Verify application bundle
