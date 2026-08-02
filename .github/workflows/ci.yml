@@ -12,18 +12,18 @@ permissions:
 jobs:
   build-and-test:
     name: Build and test on macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select a Swift 6 Xcode toolchain
+      - name: Select a Swift 6.2 Xcode toolchain
         shell: bash
         run: |
-          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_16*.app' | sort | tail -n 1)"
+          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort | tail -n 1)"
           if [[ -z "$xcode_path" ]]; then
-            echo "No Xcode 16 installation is available on this runner" >&2
+            echo "No Xcode 26 installation is available on this runner" >&2
             exit 1
           fi
           sudo xcode-select --switch "$xcode_path/Contents/Developer"
