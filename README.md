@@ -7,6 +7,14 @@ MiddleAI is a local-first macOS voice layer for dictation and an existing privat
 
 MiddleAI replaces FluidVoice for this workflow. Tap the left Option key to start dictation and tap it again to finish, or hold it for push-to-talk. The right Option key works the same way for spoken requests to OpenWebUI. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
 
+## Download
+
+Ready-to-run Apple Silicon builds are available under [GitHub Releases](https://github.com/sschluet/middleai/releases). Download `MiddleAI-<version>-macOS-arm64.zip`, unpack it and move `MiddleAI.app` to `/Applications`.
+
+The current development releases are ad-hoc signed but not yet Developer-ID signed or notarized. On first launch, macOS can therefore require right-clicking `MiddleAI.app` and choosing **Open**. Microphone and Accessibility permissions, OpenWebUI credentials and local speech models must be configured separately on every Mac.
+
+Each release includes a SHA-256 checksum file. Models are downloaded on first use and are never included in the release archive.
+
 ## What is included
 
 - Native SwiftUI menu-bar app with first-run settings, quick input, status, profiles and current-chat link

@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build macOS arm64 release
+    runs-on: macos-15-arm64
+    timeout-minutes: 40
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Select a Swift 6.2 Xcode toolchain
+        shell: bash
+        run: |
+          xcode_path="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort | tail -n 1)"
+          if [[ -z "$xcode_path" ]]; then
+            echo "No Xcode 26 installation is available on this runner" >&2
+            exit 1
+          fi
+          sudo xcode-select --switch "$xcode_path/Contents/Developer"
+          swift --version
+
+      - name: Restore Swift package cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-${{ runner.arch }}-swift62-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swift62-
+
+      - name: Run test suite
+        run: swift run -c release middleai-tests
+
+      - name: Build application bundle
+        run: ./scripts/build-app.sh
+
+      - name: Verify application bundle
+        shell: bash
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/MiddleAI.app
+          [[ "$(file dist/MiddleAI.app/Contents/MacOS/MiddleAI)" == *"arm64"* ]]
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/MiddleAI.app/Contents/Info.plist)" = "${RELEASE_TAG#v}"
+
+      - name: Package application
+        shell: bash
+        run: |
+          archive="MiddleAI-${RELEASE_TAG}-macOS-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/MiddleAI.app "$archive"
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "$RELEASE_ARCHIVE" \
+            "$RELEASE_ARCHIVE.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "MiddleAI $RELEASE_TAG" \
+            --generate-notes \
+            --notes "Apple-Silicon-App für macOS 14 oder neuer. Das ZIP enthält MiddleAI.app. Dieser Entwicklungsbuild ist ad-hoc signiert und noch nicht von Apple notarisiert; beim ersten Start kann Rechtsklick und Öffnen erforderlich sein."
