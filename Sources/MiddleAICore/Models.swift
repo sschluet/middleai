@@ -58,6 +58,13 @@ public struct RoutingDecision: Codable, Equatable, Sendable {
   public var confidence: Double
   public var reason: String
 
+  enum CodingKeys: String, CodingKey {
+    case decision
+    case chatID = "chat_id"
+    case confidence
+    case reason
+  }
+
   public init(
     decision: RoutingDecisionKind, chatID: String? = nil, confidence: Double, reason: String
   ) {

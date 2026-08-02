@@ -113,21 +113,22 @@ enum TTSModelLibrary {
     } else {
       fluidRoot = home.appendingPathComponent(".cache/fluidaudio/Models", isDirectory: true)
     }
-    let runtime = home.appendingPathComponent(".middleai/runtime", isDirectory: true)
     return [
       "qwen3_tts": [
         huggingFaceHub.appendingPathComponent(
           "models--mlx-community--Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit", isDirectory: true),
-        runtime,
       ],
       "voxtral_tts": [
         huggingFaceHub.appendingPathComponent(
           "models--mlx-community--Voxtral-4B-TTS-2603-mlx-4bit", isDirectory: true),
-        runtime,
       ],
       "supertonic3": [fluidRoot.appendingPathComponent("supertonic-3", isDirectory: true)],
       "pockettts": [fluidRoot.appendingPathComponent("pocket-tts", isDirectory: true)],
     ]
+  }
+
+  static func deletablePaths(for modelID: String) -> [URL] {
+    modelPaths()[modelID] ?? []
   }
 
   private static func isReady(_ id: String, bytes: Int64, paths: [String: [URL]]) -> Bool {

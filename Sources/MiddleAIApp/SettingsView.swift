@@ -44,6 +44,7 @@ struct SettingsView: View {
   @State private var selected: MiddleAISettingsPane?
   @State private var password = ""
   @State private var saveMessage = ""
+  @State private var ttsModelToDelete: TTSModelDownloadStatus?
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
@@ -296,7 +297,8 @@ struct SettingsView: View {
           ForEach(state.ttsModelStatuses) { model in
             TTSModelStatusRow(
               model: model,
-              selected: TTSModelLibrary.modelID(for: state.config.tts.provider) == model.id)
+              selected: TTSModelLibrary.modelID(for: state.config.tts.provider) == model.id,
+              onDelete: { ttsModelToDelete = model })
           }
         }
         Text("Die Fortschrittswerte basieren auf dem tatsächlich belegten lokalen Speicher. Modellgrößen sind gerundet; beim Entpacken kann der benötigte Platz vorübergehend höher sein.")
@@ -316,6 +318,15 @@ struct SettingsView: View {
           }
           .buttonStyle(.borderless)
         }
+      }
+      .alert(item: $ttsModelToDelete) { model in
+        Alert(
+          title: Text("\(model.title) löschen?"),
+          message: Text("Die heruntergeladenen Modelldaten werden in den Papierkorb verschoben. Ist das Modell ausgewählt, wechselt MiddleAI vorher auf die macOS-Stimme. Du kannst das Modell später erneut laden."),
+          primaryButton: .destructive(Text("In Papierkorb")) {
+            state.deleteTTSModel(model)
+          },
+          secondaryButton: .cancel(Text("Abbrechen")))
       }
 
       HStack {
@@ -402,7 +413,7 @@ struct SettingsView: View {
           Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
           VStack(alignment: .leading, spacing: 3) {
             Text("Empfehlung für deine Nutzung").font(.callout.weight(.semibold))
-            Text("Lass „Hybrid“ aktiv und das lokale Zusatzmodell ausgeschaltet. Du musst hier nichts installieren oder eintragen.")
+            Text("Nutze Hybrid mit Apple Intelligence. Wenn Apple Intelligence nicht bereit ist, arbeitet MiddleAI automatisch mit den eingebauten Regeln weiter.")
               .font(.caption).foregroundStyle(.secondary)
           }
           Spacer()
@@ -435,26 +446,47 @@ struct SettingsView: View {
       }
 
       SettingsCard(
-        title: "Optionales Zusatzmodell", subtitle: "Nur nötig, wenn MiddleAI häufig den falschen Chat auswählt",
+        title: "KI für die Chat-Auswahl", subtitle: "Wähle bewusst zwischen Apple Intelligence und einem eigenen lokalen Server",
         symbol: "cpu")
       {
-        Toggle("Lokales Ollama-Modell zur Chat-Auswahl verwenden", isOn: $state.config.localLLM.enabled)
-        Text(
-          state.config.localLLM.enabled
-            ? "MiddleAI fragt das lokale Modell nur dann, wenn die normalen Regeln uneinig sind. Übertragen werden die neue Frage sowie Titel und Kurzfassungen von höchstens acht lokalen Unterhaltungen."
-            : "Ausgeschaltet: MiddleAI nutzt schnelle lokale Regeln. Das ist der empfohlene Modus und benötigt keine weitere Software.")
+        Picker(
+          "Quelle",
+          selection: Binding(
+            get: { state.intelligenceProviderChoice },
+            set: { state.selectIntelligenceProvider($0) })
+        ) {
+          Text("Apple Intelligence · empfohlen").tag("apple")
+          Text("Ollama · eigener lokaler Server").tag("ollama")
+          Text("llama.cpp · OpenAI-kompatibler Server").tag("llama_cpp")
+          Text("Nur MiddleAI-Regeln · ohne KI-Modell").tag("rules")
+        }
+        .pickerStyle(.menu)
+        Text(intelligenceProviderDescription)
           .font(.caption).foregroundStyle(.secondary)
-        if state.config.localLLM.enabled {
-          SettingsField(title: "Endpunkt", prompt: "http://127.0.0.1:11434", text: $state.config.localLLM.url)
-          SettingsField(title: "Modell", prompt: "qwen3:4b", text: $state.config.localLLM.model)
-          Text("Voraussetzung: Ollama läuft auf diesem Mac und das eingetragene Modell wurde bereits lokal geladen. Dieses Modell formuliert keine Antworten.")
+
+        if ["ollama", "llama_cpp"].contains(state.intelligenceProviderChoice) {
+          Divider()
+          SettingsField(
+            title: "Server-Endpunkt",
+            prompt: state.intelligenceProviderChoice == "llama_cpp"
+              ? "http://127.0.0.1:18881" : "http://127.0.0.1:11434",
+            text: $state.config.localLLM.url)
+          SettingsField(
+            title: "Modell-ID oder Alias",
+            prompt: state.intelligenceProviderChoice == "llama_cpp" ? "z. B. router" : "qwen3:4b",
+            text: $state.config.localLLM.model)
+          Text(localServerHelp)
             .font(.caption).foregroundStyle(.secondary)
         }
+        Divider()
+        Label("Diese Auswahl betrifft nur mehrdeutige Chat-Zuordnungen. Antworten erzeugt weiterhin OpenWebUI. Diktatglättung stellst du unter „Spracheingabe“ ein; Kurzfassungen unter „Sprachausgabe“.", systemImage: "lock.shield")
+          .font(.caption).foregroundStyle(.secondary)
         HStack {
-          if state.config.localLLM.enabled {
-            Button("Lokales Modell prüfen") { state.testLocalRouter() }
-              .buttonStyle(.bordered)
+          Button(state.intelligenceProviderChoice == "apple" ? "Verfügbarkeit prüfen" : "Verbindung prüfen") {
+            state.testLocalRouter()
           }
+          .buttonStyle(.bordered)
+          .disabled(state.intelligenceProviderChoice == "rules")
           Button("Einstellungen speichern") { state.saveIntelligenceSettings() }
           .buttonStyle(.borderedProminent)
           Spacer()
@@ -528,6 +560,26 @@ struct SettingsView: View {
     default:
       return "Hybrid kombiniert Zeitabstand, Begriffe und einen lokalen Ähnlichkeitsvergleich. Das ist genauer und läuft auch ohne Ollama vollständig lokal."
     }
+  }
+
+  private var intelligenceProviderDescription: String {
+    switch state.intelligenceProviderChoice {
+    case "apple":
+      return "Apple Intelligence läuft über das macOS-Systemmodell, benötigt keinen separaten Download in MiddleAI und bekommt nur dann Kontext, wenn Hybridregeln bei der Chat-Auswahl uneinig sind. Nicht verfügbar auf diesem Mac? Dann bleiben die eingebauten Regeln aktiv."
+    case "ollama":
+      return "Ollama stellt ein selbst gewähltes lokales Modell bereit. MiddleAI verwendet dessen OpenAI-kompatible API ausschließlich als Entscheidungshilfe für mehrdeutige Chat-Zuordnungen."
+    case "llama_cpp":
+      return "llama.cpp wird über seine lokale OpenAI-kompatible Server-API angesprochen. Für deinen Mac ist http://127.0.0.1:18881 voreingestellt. MiddleAI startet oder lädt den Server selbst nicht."
+    default:
+      return "MiddleAI nutzt nur Zeitabstand, Begriffe und lokale Ähnlichkeit. Das braucht weder Apple Intelligence noch einen Modellserver und ist der robusteste Rückfallmodus."
+    }
+  }
+
+  private var localServerHelp: String {
+    if state.intelligenceProviderChoice == "llama_cpp" {
+      return "Der Server muss /v1/models und /v1/chat/completions anbieten. Bei einem llama.cpp-Router mit automatischem Laden trägst du als Modell-ID den dort konfigurierten Modellalias ein. Bleibt /v1/models leer, ist der Server zwar erreichbar, aber noch kein Modell bekannt."
+    }
+    return "Ollama muss laufen und das Modell muss bereits mit „ollama pull“ geladen sein. Der Standardendpunkt ist http://127.0.0.1:11434; MiddleAI ergänzt /v1 automatisch."
   }
 
   private var providerDescription: String {
@@ -643,6 +695,7 @@ private struct SettingsCard<Content: View>: View {
 private struct TTSModelStatusRow: View {
   let model: TTSModelDownloadStatus
   let selected: Bool
+  let onDelete: () -> Void
 
   private var statusColor: Color {
     switch model.phase {
@@ -686,6 +739,14 @@ private struct TTSModelStatusRow: View {
           Text(statusTitle).font(.caption.weight(.medium)).foregroundStyle(statusColor)
         }
         Spacer(minLength: 0)
+        if model.downloadedBytes > 0 && model.phase != .downloading {
+          Button(action: onDelete) {
+            Image(systemName: "trash")
+          }
+          .buttonStyle(.borderless)
+          .help("Modelldaten in den Papierkorb verschieben")
+          .accessibilityLabel("\(model.title) löschen")
+        }
       }
       if model.phase == .downloading || (model.phase == .notDownloaded && model.downloadedBytes > 0) {
         ProgressView(value: model.progress)

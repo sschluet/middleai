@@ -45,7 +45,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var ttsModelStatuses: [TTSModelDownloadStatus] = TTSModelLibrary.scan(
     activeModelID: nil, confirmed: [], failures: [:])
   @Published var ttsPreparingModelID: String?
-  @Published var intelligenceStatus = "Empfohlen: Hybrid ohne zusätzliches Modell"
+  @Published var intelligenceStatus = "Bereit. Die schnelle lokale Hybrid-Auswahl ist aktiv."
   @Published var conversations: [Conversation] = []
   let credentials = CompositeCredentialStore()
   private(set) var engine: MiddleAIEngine?
@@ -370,6 +370,45 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  func deleteTTSModel(_ model: TTSModelDownloadStatus) {
+    guard model.phase != .downloading else {
+      ttsStatus = "Ein laufender Modelldownload kann nicht gelöscht werden"
+      return
+    }
+    let paths = TTSModelLibrary.deletablePaths(for: model.id).filter {
+      FileManager.default.fileExists(atPath: $0.path)
+    }
+    guard !paths.isEmpty else {
+      ttsStatus = "Für \(model.title) wurden keine Modelldaten gefunden"
+      refreshTTSModelStatuses()
+      return
+    }
+    engine?.ttsQueue.stop()
+    ttsPreviewTask?.cancel()
+    confirmedTTSModels.remove(model.id)
+    ttsModelFailures[model.id] = nil
+    if TTSModelLibrary.modelID(for: config.tts.provider) == model.id {
+      config.tts.provider = "macos"
+      config.tts.voice = TTSVoiceCatalog.defaultVoice(for: "macos")
+      try? ConfigLoader.save(config)
+      try? rebuild()
+      Task { [weak self] in await self?.connectAndServe() }
+    }
+    ttsStatus = "\(model.title) wird in den Papierkorb verschoben …"
+    NSWorkspace.shared.recycle(paths) { [weak self] _, error in
+      Task { @MainActor in
+        guard let self else { return }
+        if let error {
+          self.ttsStatus = "\(model.title) konnte nicht gelöscht werden"
+          self.lastError = error.localizedDescription
+        } else {
+          self.ttsStatus = "\(model.title) wurde in den Papierkorb verschoben"
+        }
+        self.refreshTTSModelStatuses()
+      }
+    }
+  }
+
   private func startTTSPreparation(using selectedEngine: MiddleAIEngine, preview: Bool) {
     ttsPreviewTask?.cancel()
     let provider = config.tts.provider
@@ -432,11 +471,51 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   func useRecommendedRouting() {
     config.routing.strategy = "hybrid"
     config.routing.continuationTimeoutSeconds = 300
-    config.localLLM.enabled = false
-    saveIntelligenceSettings(message: "Empfohlene Einstellung aktiv: Hybrid, ohne Zusatzmodell")
+    config.localLLM.enabled = true
+    config.localLLM.provider = "apple"
+    saveIntelligenceSettings(message: "Empfohlen aktiv: Hybrid mit Apple Intelligence als lokaler Rückfrage")
+  }
+
+  var intelligenceProviderChoice: String {
+    config.localLLM.enabled ? config.localLLM.provider : "rules"
+  }
+
+  func selectIntelligenceProvider(_ provider: String) {
+    switch provider {
+    case "rules":
+      config.localLLM.enabled = false
+    case "apple":
+      config.localLLM.enabled = true
+      config.localLLM.provider = "apple"
+    case "ollama":
+      let changed = config.localLLM.provider != "ollama"
+      config.localLLM.enabled = true
+      config.localLLM.provider = "ollama"
+      if changed {
+        config.localLLM.url = "http://127.0.0.1:11434"
+        config.localLLM.model = "qwen3:4b"
+      }
+    case "llama_cpp":
+      let changed = config.localLLM.provider != "llama_cpp"
+      config.localLLM.enabled = true
+      config.localLLM.provider = "llama_cpp"
+      if changed {
+        config.localLLM.url = "http://127.0.0.1:18881"
+        config.localLLM.model = ""
+      }
+    default: return
+    }
+    intelligenceStatus = "Auswahl geändert. Mit „Einstellungen speichern“ wird sie aktiv."
   }
 
   func saveIntelligenceSettings(message: String = "Routing-Einstellungen gespeichert") {
+    if ["ollama", "llama_cpp"].contains(config.localLLM.provider),
+      config.localLLM.enabled,
+      config.localLLM.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      intelligenceStatus = "Bitte zuerst die Modell-ID oder den Modellalias eintragen."
+      return
+    }
     do {
       try ConfigLoader.save(config)
       try rebuild()
@@ -453,24 +532,36 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       intelligenceStatus = "Das lokale Zusatzmodell ist ausgeschaltet und wird nicht benötigt"
       return
     }
-    intelligenceStatus = "Lokales Modell wird geprüft …"
+    if config.localLLM.provider == "apple" {
+      intelligenceStatus = "Apple Intelligence: \(DictationPolisher.availabilityDescription)"
+      return
+    }
+    intelligenceStatus = "Lokaler Server wird geprüft …"
     Task {
       do {
-        guard var components = URLComponents(string: config.localLLM.url) else {
+        guard let endpoint = URL(string: config.localLLM.url) else {
           throw MiddleAIError.configuration("Der lokale Modell-Endpunkt ist ungültig.")
         }
-        components.path = "/v1/models"
-        guard let url = components.url else {
-          throw MiddleAIError.configuration("Der lokale Modell-Endpunkt ist ungültig.")
-        }
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: LocalLLMEndpoint.modelsURL(from: endpoint))
         request.timeoutInterval = 4
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let code = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(code)
         else { throw MiddleAIError.network("Das lokale Modell antwortet nicht.") }
-        intelligenceStatus = "Lokaler Ollama-Endpunkt ist erreichbar"
+        struct ModelList: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
+        let models = (try? JSONDecoder().decode(ModelList.self, from: data).data.map(\.id)) ?? []
+        if config.localLLM.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let first = models.first
+        {
+          config.localLLM.model = first
+        }
+        let name = config.localLLM.provider == "llama_cpp" ? "llama.cpp" : "Ollama"
+        if models.isEmpty {
+          intelligenceStatus = "\(name) ist erreichbar, meldet aber noch kein geladenes Modell. Bitte Modell-ID oder Alias eintragen."
+        } else {
+          intelligenceStatus = "\(name) ist erreichbar · \(models.count) Modell(e) gefunden"
+        }
       } catch {
-        intelligenceStatus = "Lokales Modell nicht erreichbar. Für den empfohlenen Modus bitte ausschalten."
+        intelligenceStatus = "Lokaler Server nicht erreichbar. Endpunkt und laufenden Dienst prüfen."
         lastError = error.localizedDescription
       }
     }

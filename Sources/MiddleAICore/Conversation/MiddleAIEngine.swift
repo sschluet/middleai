@@ -202,8 +202,12 @@ public enum MiddleAIFactory {
       path: directory.appendingPathComponent("middleai.sqlite").path)
     let heuristic = HeuristicRouter(continuationTimeout: config.routing.continuationTimeoutSeconds)
     var llm: (any ConversationRoutingStrategy)?
-    if config.localLLM.enabled, let url = URL(string: config.localLLM.url) {
-      llm = LLMRouter(endpoint: url, model: config.localLLM.model)
+    if config.localLLM.enabled {
+      if config.localLLM.provider == "apple" {
+        llm = AppleIntelligenceRouter()
+      } else if let url = URL(string: config.localLLM.url) {
+        llm = LLMRouter(endpoint: url, model: config.localLLM.model)
+      }
     }
     let router: any ConversationRoutingStrategy =
       config.routing.strategy == "heuristic"

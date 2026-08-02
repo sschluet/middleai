@@ -61,6 +61,9 @@ struct FixedRouter: ConversationRoutingStrategy {
     var c = AppConfig()
     c.openwebui.url = "https://ai.internal"
     c.dictation.polishWithLocalAI = false
+    c.localLLM.enabled = true
+    c.localLLM.provider = "llama_cpp"
+    c.localLLM.url = "http://127.0.0.1:18881"
     c.hotkeys.dictation = "left_control"
     c.hotkeys.assistant = "right_command"
     let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(c))
@@ -71,6 +74,22 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(parsed.spokenResponseMode == "smart_summary", "smart spoken summary default")
     try expect(parsed.spokenResponseThreshold == 850, "spoken summary threshold round-trip")
     try expect(!parsed.dictation.polishWithLocalAI, "dictation polishing round-trip")
+    try expect(
+      parsed.localLLM.enabled && parsed.localLLM.provider == "llama_cpp"
+        && parsed.localLLM.url == "http://127.0.0.1:18881",
+      "llama.cpp intelligence round-trip")
+    try expect(
+      LocalLLMEndpoint.completionsURL(from: URL(string: "http://127.0.0.1:18881")!).absoluteString
+        == "http://127.0.0.1:18881/v1/chat/completions",
+      "llama.cpp completion endpoint")
+    try expect(
+      LocalLLMEndpoint.modelsURL(from: URL(string: "http://127.0.0.1:11434/v1")!).absoluteString
+        == "http://127.0.0.1:11434/v1/models",
+      "Ollama v1 endpoint normalization")
+    let routed = try JSONDecoder().decode(
+      RoutingDecision.self,
+      from: Data(#"{"decision":"switch_chat","chat_id":"abc","confidence":0.9,"reason":"match"}"#.utf8))
+    try expect(routed.chatID == "abc", "local router snake-case chat ID")
     try expect(
       parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command",
       "activation keys round-trip")

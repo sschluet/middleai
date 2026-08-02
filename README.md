@@ -57,7 +57,20 @@ open dist/MiddleAI.app
 
 The setup builds an ad-hoc signed local `.app`, places the CLI at `dist/bin/middleai`, and creates `~/.middleai/config.yaml`. Nothing is installed system-wide.
 
-The first launch downloads the Parakeet Core ML STT model and the selected TTS model once. Both run locally after those downloads. Settings → Speech shows the installed state, actual local size and live approximate download progress for every managed TTS model.
+The first launch downloads the Parakeet Core ML STT model and the selected TTS model once. Both run locally after those downloads. Settings → Speech shows the installed state, actual local size and live approximate download progress for every managed TTS model. Installed or partial TTS model downloads can be moved to the macOS Trash from the same list; MiddleAI never deletes the shared managed runtime with an individual voice model.
+
+### Local intelligence and chat routing
+
+Settings → Intelligence separates conversation routing from answer generation. OpenWebUI always generates the actual answer. MiddleAI only decides whether an input continues the current conversation, switches to a recent one or starts a new chat.
+
+The Hybrid strategy first compares recency, wording and local text similarity. If those signals disagree, one optional local intelligence source can break the tie:
+
+- **Apple Intelligence** uses the on-device macOS Foundation Model on supported macOS 26 systems. If it is unavailable, Hybrid safely falls back to its built-in rules.
+- **Ollama** uses the local OpenAI-compatible API, normally at `http://127.0.0.1:11434`, with an already downloaded model such as `qwen3:4b`.
+- **llama.cpp** uses an OpenAI-compatible `llama-server` or router. MiddleAI defaults this option to `http://127.0.0.1:18881` and calls `/v1/models` plus `/v1/chat/completions`.
+- **MiddleAI rules only** disables the optional model and requires no separate AI runtime.
+
+For Ollama or llama.cpp, the configured model ID or alias must be known to the server. A successful connection test with an empty `/v1/models` response means the server is reachable, but no model is currently advertised. Only the current input and the titles and summaries of up to eight recent local conversations are sent to this loopback service.
 
 ### Copying MiddleAI to another Mac
 

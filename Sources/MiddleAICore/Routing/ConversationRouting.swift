@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(FoundationModels)
+  import FoundationModels
+#endif
+
 public protocol ConversationRoutingStrategy: Sendable {
   func route(_ context: ConversationContext) async throws -> RoutingDecision
 }
@@ -146,14 +150,76 @@ public struct LLMRouter: ConversationRoutingStrategy {
     return result
   }
   private var completionURL: URL {
-    endpoint.path.contains("/v1/")
-      ? endpoint : endpoint.appendingPathComponent("v1/chat/completions")
+    LocalLLMEndpoint.completionsURL(from: endpoint)
   }
   private func extractJSON(_ text: String) -> String {
     guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
       return text
     }
     return String(text[start...end])
+  }
+}
+
+public enum LocalLLMEndpoint {
+  public static func completionsURL(from endpoint: URL) -> URL {
+    normalized(endpoint, suffix: "chat/completions")
+  }
+
+  public static func modelsURL(from endpoint: URL) -> URL {
+    normalized(endpoint, suffix: "models")
+  }
+
+  private static func normalized(_ endpoint: URL, suffix: String) -> URL {
+    var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+    components?.query = nil
+    components?.fragment = nil
+    var parts = (components?.path ?? "").split(separator: "/").map(String.init)
+    if let v1 = parts.firstIndex(of: "v1") {
+      parts = Array(parts.prefix(through: v1))
+    } else {
+      parts.append("v1")
+    }
+    parts.append(contentsOf: suffix.split(separator: "/").map(String.init))
+    components?.path = "/" + parts.joined(separator: "/")
+    return components?.url ?? endpoint
+  }
+}
+
+public struct AppleIntelligenceRouter: ConversationRoutingStrategy {
+  public init() {}
+
+  public func route(_ context: ConversationContext) async throws -> RoutingDecision {
+    #if canImport(FoundationModels)
+      if #available(macOS 26.0, *) {
+        let model = SystemLanguageModel(
+          useCase: .general, guardrails: .permissiveContentTransformations)
+        guard model.availability == .available else {
+          throw MiddleAIError.configuration("Apple Intelligence ist auf diesem Mac nicht bereit.")
+        }
+        let candidates = context.recent.prefix(8).map {
+          "id=\($0.id); titel=\($0.title); kurzfassung=\($0.summary)"
+        }.joined(separator: "\n")
+        let session = LanguageModelSession(
+          model: model,
+          instructions: """
+            Du ordnest ausschließlich Unterhaltungen zu und beantwortest niemals die Nutzerfrage. Antworte nur mit einem JSON-Objekt mit decision, chat_id, confidence und reason. decision ist continue_current, switch_chat, new_chat oder ask_user. confidence liegt zwischen 0 und 1.
+            """)
+        let result = try await session.respond(
+          to: """
+            Aktueller Chat: \(context.current?.id ?? "keiner")
+            Kandidaten:
+            \(candidates)
+            Neue Eingabe: \(context.input)
+            """)
+        let text = result.content
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+          let data = String(text[start...end]).data(using: .utf8),
+          let decision = try? JSONDecoder().decode(RoutingDecision.self, from: data)
+        else { throw MiddleAIError.invalidResponse("Apple Intelligence lieferte keine gültige Chat-Auswahl.") }
+        return decision
+      }
+    #endif
+    throw MiddleAIError.configuration("Apple Intelligence benötigt macOS 26 und ein unterstütztes Gerät.")
   }
 }
 
