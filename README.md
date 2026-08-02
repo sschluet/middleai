@@ -1,5 +1,9 @@
 # MiddleAI
 
+<p align="center">
+  <img src="Resources/Brand/MiddleAI-AppIcon.png" alt="MiddleAI app icon" width="144">
+</p>
+
 [![CI](https://github.com/sschluet/middleai/actions/workflows/ci.yml/badge.svg)](https://github.com/sschluet/middleai/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
@@ -23,6 +27,7 @@ Each release includes a SHA-256 checksum file. Models are downloaded on first us
 - FluidVoice-inspired 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
 - Silent dismissal for accidental, too-short or empty Option-key recordings
 - Optional on-device dictation polishing with Apple Intelligence to remove filler words, repetitions and slips before insertion
+- Conservative spoken formatting commands for Microsoft Word, PowerPoint, Outlook and Proton Mail, including paragraphs, line breaks, German quotation marks and rich lists
 - Clipboard-preserving insertion into the previously active text field
 - Shared Swift core plus `middleai` CLI
 - Loopback-only synchronous `POST /input` plus queued `POST /command` for optional local integrations
@@ -113,6 +118,18 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 8. Use right Option the same way to ask OpenWebUI. MiddleAI displays and speaks the response.
 
 The Voice settings contain **Diktat vor dem Einfügen lokal glätten**. On macOS 26, this uses Apple's on-device Foundation Model with German locale support. MiddleAI accepts a generated correction only when numbers and protected terms remain present, the vocabulary stays close to the transcript and no substantial new wording is introduced. Otherwise it keeps a conservative local cleanup that only removes filler sounds and direct repetitions. Dictation text is never sent to OpenWebUI or another cloud service for polishing.
+
+### Spoken formatting in supported apps
+
+When dictating into Microsoft Word (`com.microsoft.Word`), Microsoft PowerPoint (`com.microsoft.Powerpoint`), Microsoft Outlook (`com.microsoft.Outlook`) or Proton Mail (`ch.protonmail.desktop`), MiddleAI can translate explicit German structure commands into formatted output. The feature is enabled by default and can be disabled under Settings → Spracheingabe.
+
+- `neue Zeile` inserts a line break; `neuer Absatz` starts a new paragraph.
+- `in Anführungsstrichen Projekt Apollo` becomes `„Projekt Apollo“`.
+- `Anführungszeichen auf … Anführungszeichen zu` and `Zitat Anfang … Zitat Ende` create paired German quotation marks.
+- `Aufzählung, Punkt eins …, nächster Punkt …, Liste Ende` creates a bulleted list.
+- Starting with `nummerierte Liste` creates an ordered list.
+
+MiddleAI places plain text, HTML and RTF representations on the clipboard for supported targets so Office editors and mail composers can preserve lists and paragraphs. The previous clipboard contents are restored afterwards. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
 
 The password is written to Keychain service `de.middleai.openwebui`, never to YAML. For development only, `MIDDLEAI_OPENWEBUI_PASSWORD` may be set from a gitignored `.env`-style shell environment.
 

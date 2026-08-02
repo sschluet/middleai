@@ -55,17 +55,7 @@ struct SettingsView: View {
     NavigationSplitView {
       VStack(spacing: 0) {
         HStack(spacing: 11) {
-          ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-              .fill(
-                LinearGradient(
-                  colors: [Color.accentColor, Color.purple.opacity(0.75)],
-                  startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: "waveform.and.sparkles")
-              .font(.system(size: 17, weight: .semibold))
-              .foregroundStyle(.white)
-          }
-          .frame(width: 40, height: 40)
+          MiddleAIIconView(cornerRadius: 10).frame(width: 40, height: 40)
           VStack(alignment: .leading, spacing: 2) {
             Text("MiddleAI").font(.headline)
             Text("Einstellungen").font(.caption).foregroundStyle(.secondary)
@@ -377,6 +367,22 @@ struct SettingsView: View {
             set: { state.setDictationPolishing($0) }))
         Text("Bedeutung, Namen, Zahlen, Fachbegriffe und Anrede bleiben erhalten.")
           .font(.caption).foregroundStyle(.secondary)
+        Divider()
+        Toggle(
+          "Gesprochene Formatierungsbefehle in unterstützten Apps umsetzen",
+          isOn: Binding(
+            get: { state.config.dictation.smartFormatting },
+            set: { state.setDictationSmartFormatting($0) }))
+        Text("MiddleAI erkennt nur eindeutige Hinweise wie „neue Zeile“, „neuer Absatz“, „in Anführungsstrichen“, „Aufzählung … nächster Punkt …“ und „nummerierte Liste“. Der normale Wortlaut wird nicht eigenständig umstrukturiert.")
+          .font(.caption).foregroundStyle(.secondary)
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+          SupportedFormattingApp(name: "Microsoft Word", symbol: "doc.text")
+          SupportedFormattingApp(name: "Microsoft PowerPoint", symbol: "rectangle.on.rectangle")
+          SupportedFormattingApp(name: "Microsoft Outlook", symbol: "envelope")
+          SupportedFormattingApp(name: "Proton Mail", symbol: "lock.shield")
+        }
+        Text("Word und PowerPoint erhalten zusätzlich Rich Text und HTML für Listen. Outlook und Proton Mail erhalten formatierte E-Mail-Absätze, Zeilenumbrüche, Zitate und Aufzählungen. Außerhalb dieser vier Apps wird das Diktat unverändert als Klartext eingefügt.")
+          .font(.caption).foregroundStyle(.secondary)
       }
 
       SettingsCard(
@@ -530,6 +536,19 @@ struct SettingsView: View {
       }
 
       SettingsCard(
+        title: "Formatierungsbefehle diktieren",
+        subtitle: "Word, PowerPoint, Outlook und Proton Mail verstehen gesprochene Struktur",
+        symbol: "text.alignleft")
+      {
+        HelpStep(number: "1", title: "Zeilen und Absätze", detail: "„Neue Zeile“ erzeugt einen einfachen Umbruch. „Neuer Absatz“ erzeugt einen Absatzabstand.")
+        HelpStep(number: "2", title: "Anführungszeichen", detail: "Sage etwa „in Anführungsstrichen Projekt Apollo“ oder „Anführungszeichen auf … Anführungszeichen zu“.")
+        HelpStep(number: "3", title: "Aufzählungen", detail: "Sage „Aufzählung, Punkt eins …, nächster Punkt …, Liste Ende“. Für nummerierte Punkte beginne mit „nummerierte Liste“.")
+        HelpStep(number: "4", title: "Bewusst konservativ", detail: "MiddleAI formatiert nur eindeutige Befehle. Normale Aussagen wie „Die neue Zeile ist rot“ bleiben unverändert.")
+        Label("Die Auswertung erfolgt lokal nach der optionalen Diktatglättung. Außerhalb der vier unterstützten Apps wird ausschließlich Klartext eingefügt.", systemImage: "lock.shield")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
         title: "Speicherbedarf", subtitle: "Gerundete Größen der aktuellen Modellvarianten",
         symbol: "externaldrive.badge.icloud")
       {
@@ -645,6 +664,26 @@ private struct IntelligenceStep: View {
         Text(detail).font(.caption).foregroundStyle(.secondary)
       }
     }
+  }
+}
+
+private struct SupportedFormattingApp: View {
+  let name: String
+  let symbol: String
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: symbol)
+        .foregroundStyle(Color.accentColor)
+        .frame(width: 18)
+      Text(name).font(.caption.weight(.medium))
+      Spacer(minLength: 0)
+      Image(systemName: "checkmark.circle.fill")
+        .font(.caption)
+        .foregroundStyle(.green)
+    }
+    .padding(.horizontal, 10).padding(.vertical, 8)
+    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
   }
 }
 

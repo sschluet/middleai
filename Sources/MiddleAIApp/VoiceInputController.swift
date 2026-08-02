@@ -8,6 +8,33 @@ import OSLog
 struct DictationTarget {
   let application: NSRunningApplication?
   let icon: NSImage?
+  let supportedApplication: SupportedDictationApplication?
+}
+
+enum SupportedDictationApplication: String, CaseIterable {
+  case word
+  case powerPoint
+  case outlook
+  case protonMail
+
+  init?(bundleIdentifier: String?) {
+    switch bundleIdentifier?.lowercased() {
+    case "com.microsoft.word": self = .word
+    case "com.microsoft.powerpoint": self = .powerPoint
+    case "com.microsoft.outlook": self = .outlook
+    case "ch.protonmail.desktop": self = .protonMail
+    default: return nil
+    }
+  }
+
+  var name: String {
+    switch self {
+    case .word: return "Microsoft Word"
+    case .powerPoint: return "Microsoft PowerPoint"
+    case .outlook: return "Microsoft Outlook"
+    case .protonMail: return "Proton Mail"
+    }
+  }
 }
 
 @MainActor final class TextInsertionService {
@@ -19,19 +46,32 @@ struct DictationTarget {
     let app = NSWorkspace.shared.frontmostApplication
     let target = app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app
     let icon = target?.bundleURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
-    return DictationTarget(application: target, icon: icon)
+    return DictationTarget(
+      application: target, icon: icon,
+      supportedApplication: SupportedDictationApplication(bundleIdentifier: target?.bundleIdentifier))
   }
 
-  func insert(_ text: String, into target: DictationTarget) throws {
+  func insert(
+    _ text: String, into target: DictationTarget, smartFormatting: Bool
+  ) throws -> FormattedDictation {
     guard AXIsProcessTrusted() else {
       throw VoiceInputError.accessibilityPermissionMissing
     }
+    let formatted = smartFormatting && target.supportedApplication != nil
+      ? DictationFormatter.format(text)
+      : FormattedDictation(plainText: text, html: "", didApplyFormatting: false)
     let pasteboard = NSPasteboard.general
     let saved = saveClipboard(pasteboard)
     pasteboard.clearContents()
-    guard pasteboard.setString(text, forType: .string) else {
+    let item = NSPasteboardItem()
+    guard item.setString(formatted.plainText, forType: .string) else {
       throw VoiceInputError.couldNotInsertText
     }
+    if formatted.didApplyFormatting {
+      item.setString(formatted.html, forType: .html)
+      if let rtf = rtfData(from: formatted.html) { item.setData(rtf, forType: .rtf) }
+    }
+    guard pasteboard.writeObjects([item]) else { throw VoiceInputError.couldNotInsertText }
     let transcriptChangeCount = pasteboard.changeCount
     target.application?.activate()
 
@@ -49,6 +89,22 @@ struct DictationTarget {
       guard pasteboard.changeCount == transcriptChangeCount else { return }
       self.restoreClipboard(saved, to: pasteboard)
     }
+    return formatted
+  }
+
+  private func rtfData(from html: String) -> Data? {
+    guard let data = html.data(using: .utf8),
+      let attributed = try? NSAttributedString(
+        data: data,
+        options: [
+          .documentType: NSAttributedString.DocumentType.html,
+          .characterEncoding: String.Encoding.utf8.rawValue,
+        ],
+        documentAttributes: nil)
+    else { return nil }
+    return try? attributed.data(
+      from: NSRange(location: 0, length: attributed.length),
+      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
   }
 
   private func saveClipboard(_ pasteboard: NSPasteboard) -> [ClipboardItem] {
@@ -458,10 +514,17 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
 
   private func finishDictation(_ text: String, target: DictationTarget?) {
     do {
-      try insertion.insert(text, into: target ?? insertion.captureTarget())
-      overlay.update(phase: .result, detail: text)
+      let destination = target ?? insertion.captureTarget()
+      let smartFormatting = configProvider().dictation.smartFormatting
+      let inserted = try insertion.insert(
+        text, into: destination, smartFormatting: smartFormatting)
+      overlay.update(phase: .result, detail: inserted.plainText)
       overlay.hide(after: 1.4)
-      onStatus("Diktat eingefügt")
+      if inserted.didApplyFormatting, let app = destination.supportedApplication {
+        onStatus("Diktat für \(app.name) formatiert und eingefügt")
+      } else {
+        onStatus("Diktat eingefügt")
+      }
     } catch {
       fail(error)
     }

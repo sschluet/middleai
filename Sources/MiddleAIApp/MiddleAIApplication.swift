@@ -9,6 +9,7 @@ extension Notification.Name {
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
+    NSApp.applicationIconImage = MiddleAIIconProvider.image
     NSApp.setActivationPolicy(.accessory)
   }
 
@@ -252,6 +253,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     do {
       try ConfigLoader.save(config)
       voiceStatus = enabled ? "Lokale Diktat-Glättung ist aktiv" : "Diktat-Glättung ist deaktiviert"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func setDictationSmartFormatting(_ enabled: Bool) {
+    config.dictation.smartFormatting = enabled
+    do {
+      try ConfigLoader.save(config)
+      voiceStatus = enabled
+        ? "App-spezifische Diktatformatierung ist aktiv"
+        : "App-spezifische Diktatformatierung ist deaktiviert"
     } catch {
       lastError = error.localizedDescription
     }
@@ -707,17 +719,7 @@ private struct QuickInputView: View {
     HStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 14) {
         HStack(spacing: 10) {
-          ZStack {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-              .fill(
-                LinearGradient(
-                  colors: [Color.accentColor, Color.accentColor.opacity(0.55)],
-                  startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: "waveform.and.sparkles")
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(.white)
-          }
-          .frame(width: 36, height: 36)
+          MiddleAIIconView(cornerRadius: 9).frame(width: 36, height: 36)
           VStack(alignment: .leading, spacing: 1) {
             Text("MiddleAI").font(.headline)
             Text("Lokaler Sprachassistent").font(.caption).foregroundStyle(.secondary)
@@ -813,15 +815,8 @@ private struct QuickInputView: View {
           ScrollView {
             if state.responseText.isEmpty && !state.isWorking {
               VStack(spacing: 14) {
-                Image(systemName: "waveform.and.sparkles")
-                  .font(.system(size: 32, weight: .medium))
-                  .foregroundStyle(Color.accentColor)
+                MiddleAIIconView(cornerRadius: 17)
                   .frame(width: 70, height: 70)
-                  .background(
-                    LinearGradient(
-                      colors: [Color.accentColor.opacity(0.14), Color.purple.opacity(0.07)],
-                      startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 21, style: .continuous))
                 Text("Womit kann ich helfen?")
                   .font(.title2.weight(.semibold))
                 Text("Schreibe eine Nachricht oder nutze die rechte Optionstaste für eine Sprachanfrage.")

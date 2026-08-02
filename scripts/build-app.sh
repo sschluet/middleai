@@ -19,6 +19,8 @@ cp "$bin_dir/MiddleAI" dist/MiddleAI.app/Contents/MacOS/MiddleAI
 cp "$bin_dir/middleai-cli" dist/bin/middleai
 rm -f dist/bin/middleai-ask
 cp Resources/Info.plist dist/MiddleAI.app/Contents/Info.plist
+cp Resources/AppIcon.icns dist/MiddleAI.app/Contents/Resources/AppIcon.icns
+cp Resources/Brand/MiddleAI-AppIcon.png dist/MiddleAI.app/Contents/Resources/MiddleAI-AppIcon.png
 cp THIRD_PARTY_NOTICES.md dist/MiddleAI.app/Contents/Resources/THIRD_PARTY_NOTICES.md
 for resource_bundle in "$bin_dir"/*.bundle(N); do
   bundle_name=${resource_bundle:t}

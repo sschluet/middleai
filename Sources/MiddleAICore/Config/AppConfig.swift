@@ -34,6 +34,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
   }
   public struct Dictation: Codable, Equatable, Sendable {
     public var polishWithLocalAI = true
+    public var smartFormatting = true
   }
   public struct Hotkeys: Codable, Equatable, Sendable {
     public var dictation: String
@@ -133,6 +134,8 @@ public enum ConfigLoader {
       case ("tts", "local_command"): c.tts.localCommand = value
       case ("dictation", "polish_with_local_ai"):
         c.dictation.polishWithLocalAI = bool(value)
+      case ("dictation", "smart_formatting"):
+        c.dictation.smartFormatting = bool(value)
       case ("hotkeys", "dictation"): c.hotkeys.dictation = value
       case ("hotkeys", "assistant"): c.hotkeys.assistant = value
       case ("api", "bind"): c.api.bind = value
@@ -196,6 +199,7 @@ public enum ConfigLoader {
       local_command: "\(c.tts.localCommand)"
     dictation:
       polish_with_local_ai: \(c.dictation.polishWithLocalAI)
+      smart_formatting: \(c.dictation.smartFormatting)
     hotkeys:
       dictation: "\(c.hotkeys.dictation)"
       assistant: "\(c.hotkeys.assistant)"

@@ -38,6 +38,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     let tests: [(String, () async throws -> Void)] = [
       ("Config", testConfig), ("Storage", testStorage), ("Commands", testCommands),
       ("SentenceBuffer", testSentenceBuffer), ("Speech text", testSpeechText),
+      ("Dictation formatting", testDictationFormatting),
       ("HeuristicRouter continuation", testRouterContinuation),
       ("HeuristicRouter new topic", testRouterNewTopic), ("HybridRouter", testHybrid),
       ("ConversationManager", testManager), ("Confidence management", testConfidence),
@@ -61,6 +62,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     var c = AppConfig()
     c.openwebui.url = "https://ai.internal"
     c.dictation.polishWithLocalAI = false
+    c.dictation.smartFormatting = false
     c.localLLM.enabled = true
     c.localLLM.provider = "llama_cpp"
     c.localLLM.url = "http://127.0.0.1:18881"
@@ -74,6 +76,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(parsed.spokenResponseMode == "smart_summary", "smart spoken summary default")
     try expect(parsed.spokenResponseThreshold == 850, "spoken summary threshold round-trip")
     try expect(!parsed.dictation.polishWithLocalAI, "dictation polishing round-trip")
+    try expect(!parsed.dictation.smartFormatting, "dictation formatting round-trip")
     try expect(
       parsed.localLLM.enabled && parsed.localLLM.provider == "llama_cpp"
         && parsed.localLLM.url == "http://127.0.0.1:18881",
@@ -177,6 +180,34 @@ struct FixedRouter: ConversationRoutingStrategy {
         Message(role: .user, content: "Fehlgeschlagen"),
       ]).count == 1,
       "failed user suffix excluded from retry")
+  }
+  static func testDictationFormatting() async throws {
+    let paragraphs = DictationFormatter.format(
+      "Hallo neue Zeile Sebastian neuer Absatz Viele Grüße")
+    try expect(
+      paragraphs.plainText == "Hallo\nSebastian\n\nViele Grüße",
+      "spoken line and paragraph commands")
+    try expect(paragraphs.html.contains("<br>") && paragraphs.html.contains("<p>"), "HTML paragraphs")
+
+    let quote = DictationFormatter.format(
+      "Das Projekt heißt in Anführungsstrichen Apollo.")
+    try expect(quote.plainText == "Das Projekt heißt „Apollo“.", "spoken inline quotes")
+
+    let bullets = DictationFormatter.format(
+      "Aufzählung Punkt eins Analyse nächster Punkt Umsetzung Liste Ende")
+    try expect(
+      bullets.plainText == "• Analyse\n• Umsetzung" && bullets.html.contains("<ul>"),
+      "spoken bullet list")
+
+    let numbered = DictationFormatter.format(
+      "Nummerierte Liste Punkt eins Recherche nächster Punkt Entscheidung Liste Ende")
+    try expect(
+      numbered.plainText == "1. Recherche\n2. Entscheidung" && numbered.html.contains("<ol>"),
+      "spoken numbered list")
+
+    let ordinary = DictationFormatter.format("Die neue Zeile ist rot.")
+    try expect(!ordinary.didApplyFormatting && ordinary.plainText == "Die neue Zeile ist rot.",
+      "ordinary wording is preserved")
   }
   static func testRouterContinuation() async throws {
     let now = Date()
