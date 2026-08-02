@@ -1,6 +1,7 @@
 import AppKit
 import MiddleAICore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   case connection
@@ -369,19 +370,40 @@ struct SettingsView: View {
           .font(.caption).foregroundStyle(.secondary)
         Divider()
         Toggle(
-          "Gesprochene Formatierungsbefehle in unterstützten Apps umsetzen",
+          "Gesprochene Formatierungsbefehle in ausgewählten Apps umsetzen",
           isOn: Binding(
             get: { state.config.dictation.smartFormatting },
             set: { state.setDictationSmartFormatting($0) }))
-        Text("MiddleAI erkennt nur eindeutige Hinweise wie „neue Zeile“, „neuer Absatz“, „in Anführungsstrichen“, „Aufzählung … nächster Punkt …“ und „nummerierte Liste“. Der normale Wortlaut wird nicht eigenständig umstrukturiert.")
+        Text("MiddleAI erkennt eindeutige Hinweise wie „neue Zeile“, „neuer Absatz“, „in Anführungsstrichen“, „Aufzählung … Punkt eins …“, „1. … zweitens … drittens …“ und „nummerierte Liste“. Der normale Wortlaut wird nicht eigenständig umstrukturiert.")
           .font(.caption).foregroundStyle(.secondary)
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
-          SupportedFormattingApp(name: "Microsoft Word", symbol: "doc.text")
-          SupportedFormattingApp(name: "Microsoft PowerPoint", symbol: "rectangle.on.rectangle")
-          SupportedFormattingApp(name: "Microsoft Outlook", symbol: "envelope")
-          SupportedFormattingApp(name: "Proton Mail", symbol: "lock.shield")
+        VStack(spacing: 7) {
+          ForEach(formattingApplicationOptions) { application in
+            FormattingApplicationRow(
+              application: application,
+              enabled: state.isDictationFormattingEnabled(
+                for: application.bundleIdentifier),
+              onToggle: {
+                state.setDictationFormattingApplication(
+                  application.bundleIdentifier, enabled: $0)
+              },
+              onRemove: application.isBuiltIn ? nil : {
+                state.setDictationFormattingApplication(
+                  application.bundleIdentifier, enabled: false)
+              })
+          }
         }
-        Text("Word und PowerPoint erhalten zusätzlich Rich Text und HTML für Listen. Outlook und Proton Mail erhalten formatierte E-Mail-Absätze, Zeilenumbrüche, Zitate und Aufzählungen. Außerhalb dieser vier Apps wird das Diktat unverändert als Klartext eingefügt.")
+        HStack {
+          Button {
+            chooseFormattingApplication()
+          } label: {
+            Label("Anwendung hinzufügen …", systemImage: "plus.app")
+          }
+          .buttonStyle(.bordered)
+          Spacer()
+          Text("Erkennung über Bundle-ID")
+            .font(.caption2).foregroundStyle(.tertiary)
+        }
+        Text("Ausgewählte Apps erhalten Klartext, Rich Text und HTML für Absätze und Listen. Nicht ausgewählte Anwendungen bekommen das Diktat unverändert als Klartext.")
           .font(.caption).foregroundStyle(.secondary)
       }
 
@@ -537,14 +559,14 @@ struct SettingsView: View {
 
       SettingsCard(
         title: "Formatierungsbefehle diktieren",
-        subtitle: "Word, PowerPoint, Outlook und Proton Mail verstehen gesprochene Struktur",
+        subtitle: "In den ausgewählten Apps wird gesprochene Struktur direkt umgesetzt",
         symbol: "text.alignleft")
       {
         HelpStep(number: "1", title: "Zeilen und Absätze", detail: "„Neue Zeile“ erzeugt einen einfachen Umbruch. „Neuer Absatz“ erzeugt einen Absatzabstand.")
         HelpStep(number: "2", title: "Anführungszeichen", detail: "Sage etwa „in Anführungsstrichen Projekt Apollo“ oder „Anführungszeichen auf … Anführungszeichen zu“.")
-        HelpStep(number: "3", title: "Aufzählungen", detail: "Sage „Aufzählung, Punkt eins …, nächster Punkt …, Liste Ende“. Für nummerierte Punkte beginne mit „nummerierte Liste“.")
+        HelpStep(number: "3", title: "Aufzählungen", detail: "Sage „Aufzählung, Punkt eins …, nächster Punkt …“ oder natürlicher „Aufzählung: 1. …, zweitens … und drittens …“. Für eine geordnete Liste beginne mit „nummerierte Liste“.")
         HelpStep(number: "4", title: "Bewusst konservativ", detail: "MiddleAI formatiert nur eindeutige Befehle. Normale Aussagen wie „Die neue Zeile ist rot“ bleiben unverändert.")
-        Label("Die Auswertung erfolgt lokal nach der optionalen Diktatglättung. Außerhalb der vier unterstützten Apps wird ausschließlich Klartext eingefügt.", systemImage: "lock.shield")
+        Label("Die Auswertung erfolgt lokal nach der optionalen Diktatglättung. Welche Apps formatiert werden, legst du unter Spracheingabe fest.", systemImage: "lock.shield")
           .font(.caption).foregroundStyle(.secondary)
       }
 
@@ -599,6 +621,60 @@ struct SettingsView: View {
       return "Der Server muss /v1/models und /v1/chat/completions anbieten. Bei einem llama.cpp-Router mit automatischem Laden trägst du als Modell-ID den dort konfigurierten Modellalias ein. Bleibt /v1/models leer, ist der Server zwar erreichbar, aber noch kein Modell bekannt."
     }
     return "Ollama muss laufen und das Modell muss bereits mit „ollama pull“ geladen sein. Der Standardendpunkt ist http://127.0.0.1:11434; MiddleAI ergänzt /v1 automatisch."
+  }
+
+  private var formattingApplicationOptions: [FormattingApplicationOption] {
+    let builtIns: [(String, String, String)] = [
+      ("com.microsoft.Word", "Microsoft Word", "doc.text"),
+      ("com.microsoft.Powerpoint", "Microsoft PowerPoint", "rectangle.on.rectangle"),
+      ("com.microsoft.Outlook", "Microsoft Outlook", "envelope"),
+      ("ch.protonmail.desktop", "Proton Mail", "lock.shield"),
+    ]
+    let builtInIDs = Set(builtIns.map { $0.0.lowercased() })
+    let defaults = builtIns.map {
+      formattingApplicationOption(
+        bundleIdentifier: $0.0, fallbackName: $0.1, symbol: $0.2, isBuiltIn: true)
+    }
+    let custom = state.config.dictation.formattingApplications
+      .filter { !builtInIDs.contains($0.lowercased()) }
+      .map {
+        formattingApplicationOption(
+          bundleIdentifier: $0, fallbackName: $0, symbol: "app", isBuiltIn: false)
+      }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    return defaults + custom
+  }
+
+  private func formattingApplicationOption(
+    bundleIdentifier: String, fallbackName: String, symbol: String, isBuiltIn: Bool
+  ) -> FormattingApplicationOption {
+    let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    let bundle = url.flatMap(Bundle.init(url:))
+    let name = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+      ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+      ?? fallbackName
+    let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+    return FormattingApplicationOption(
+      bundleIdentifier: bundleIdentifier, name: name, symbol: symbol,
+      icon: icon, isBuiltIn: isBuiltIn)
+  }
+
+  private func chooseFormattingApplication() {
+    let panel = NSOpenPanel()
+    panel.title = "Anwendung für Diktatformatierung auswählen"
+    panel.message = "MiddleAI erkennt die Anwendung lokal anhand ihrer Bundle-ID."
+    panel.prompt = "Hinzufügen"
+    panel.allowedContentTypes = [.applicationBundle]
+    panel.allowsMultipleSelection = false
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+      state.lastError = "Die ausgewählte Anwendung besitzt keine lesbare Bundle-ID."
+      return
+    }
+    state.setDictationFormattingApplication(bundleIdentifier, enabled: true)
   }
 
   private var providerDescription: String {
@@ -667,22 +743,56 @@ private struct IntelligenceStep: View {
   }
 }
 
-private struct SupportedFormattingApp: View {
+private struct FormattingApplicationOption: Identifiable {
+  var id: String { bundleIdentifier.lowercased() }
+  let bundleIdentifier: String
   let name: String
   let symbol: String
+  let icon: NSImage?
+  let isBuiltIn: Bool
+}
+
+private struct FormattingApplicationRow: View {
+  let application: FormattingApplicationOption
+  let enabled: Bool
+  let onToggle: (Bool) -> Void
+  let onRemove: (() -> Void)?
 
   var body: some View {
-    HStack(spacing: 8) {
-      Image(systemName: symbol)
-        .foregroundStyle(Color.accentColor)
-        .frame(width: 18)
-      Text(name).font(.caption.weight(.medium))
+    HStack(spacing: 10) {
+      Group {
+        if let icon = application.icon {
+          Image(nsImage: icon).resizable().interpolation(.high)
+        } else {
+          Image(systemName: application.symbol)
+            .resizable().scaledToFit().padding(5)
+            .foregroundStyle(Color.accentColor)
+        }
+      }
+      .frame(width: 28, height: 28)
+      .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(application.name).font(.callout.weight(.medium))
+        Text(application.bundleIdentifier)
+          .font(.caption2.monospaced()).foregroundStyle(.secondary)
+          .lineLimit(1).truncationMode(.middle)
+      }
       Spacer(minLength: 0)
-      Image(systemName: "checkmark.circle.fill")
-        .font(.caption)
-        .foregroundStyle(.green)
+      if let onRemove {
+        Label("Aktiv", systemImage: "checkmark.circle.fill")
+          .font(.caption.weight(.medium)).foregroundStyle(.green)
+        Button(role: .destructive, action: onRemove) {
+          Image(systemName: "trash")
+        }
+        .buttonStyle(.borderless)
+        .help("Aus der Formatierungsliste entfernen")
+      } else {
+        Toggle("", isOn: Binding(get: { enabled }, set: onToggle))
+          .labelsHidden()
+          .toggleStyle(.switch)
+      }
     }
-    .padding(.horizontal, 10).padding(.vertical, 8)
+    .padding(.horizontal, 11).padding(.vertical, 9)
     .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
   }
 }

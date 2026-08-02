@@ -33,8 +33,16 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var localCommand = ""
   }
   public struct Dictation: Codable, Equatable, Sendable {
+    public static let defaultFormattingApplications = [
+      "com.microsoft.Word",
+      "com.microsoft.Powerpoint",
+      "com.microsoft.Outlook",
+      "ch.protonmail.desktop",
+    ]
+
     public var polishWithLocalAI = true
     public var smartFormatting = true
+    public var formattingApplications = Self.defaultFormattingApplications
   }
   public struct Hotkeys: Codable, Equatable, Sendable {
     public var dictation: String
@@ -136,6 +144,10 @@ public enum ConfigLoader {
         c.dictation.polishWithLocalAI = bool(value)
       case ("dictation", "smart_formatting"):
         c.dictation.smartFormatting = bool(value)
+      case ("dictation", "formatting_applications"):
+        c.dictation.formattingApplications = value.split(separator: ",")
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { !$0.isEmpty }
       case ("hotkeys", "dictation"): c.hotkeys.dictation = value
       case ("hotkeys", "assistant"): c.hotkeys.assistant = value
       case ("api", "bind"): c.api.bind = value
@@ -200,6 +212,7 @@ public enum ConfigLoader {
     dictation:
       polish_with_local_ai: \(c.dictation.polishWithLocalAI)
       smart_formatting: \(c.dictation.smartFormatting)
+      formatting_applications: "\(c.dictation.formattingApplications.joined(separator: ","))"
     hotkeys:
       dictation: "\(c.hotkeys.dictation)"
       assistant: "\(c.hotkeys.assistant)"

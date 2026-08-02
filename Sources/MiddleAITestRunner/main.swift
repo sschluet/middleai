@@ -63,6 +63,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.openwebui.url = "https://ai.internal"
     c.dictation.polishWithLocalAI = false
     c.dictation.smartFormatting = false
+    c.dictation.formattingApplications = ["com.microsoft.Word", "com.example.Editor"]
     c.localLLM.enabled = true
     c.localLLM.provider = "llama_cpp"
     c.localLLM.url = "http://127.0.0.1:18881"
@@ -77,6 +78,9 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(parsed.spokenResponseThreshold == 850, "spoken summary threshold round-trip")
     try expect(!parsed.dictation.polishWithLocalAI, "dictation polishing round-trip")
     try expect(!parsed.dictation.smartFormatting, "dictation formatting round-trip")
+    try expect(
+      parsed.dictation.formattingApplications == ["com.microsoft.Word", "com.example.Editor"],
+      "dictation formatting applications round-trip")
     try expect(
       parsed.localLLM.enabled && parsed.localLLM.provider == "llama_cpp"
         && parsed.localLLM.url == "http://127.0.0.1:18881",
@@ -204,6 +208,20 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(
       numbered.plainText == "1. Recherche\n2. Entscheidung" && numbered.html.contains("<ol>"),
       "spoken numbered list")
+
+    let naturalEnumeration = DictationFormatter.format(
+      "Hierfür folgende Aufzählungspunkte. Aufzählung: 1. KI-Innovation, zweitens Datenklassifizierung und drittens Backup-Konzept.")
+    try expect(
+      naturalEnumeration.plainText
+        == "Hierfür folgende Aufzählungspunkte.\n\n• KI-Innovation\n• Datenklassifizierung\n• Backup-Konzept.",
+      "number and ordinal list markers: \(naturalEnumeration.plainText)")
+    try expect(naturalEnumeration.html.contains("<ul>"), "natural enumeration HTML list")
+
+    let punctuation = DictationFormatter.format(
+      "Hallo Komma Sebastian Doppelpunkt alles gut Fragezeichen")
+    try expect(
+      punctuation.plainText == "Hallo, Sebastian: alles gut?",
+      "explicit punctuation commands")
 
     let ordinary = DictationFormatter.format("Die neue Zeile ist rot.")
     try expect(!ordinary.didApplyFormatting && ordinary.plainText == "Die neue Zeile ist rot.",

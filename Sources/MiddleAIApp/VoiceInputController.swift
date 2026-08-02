@@ -8,33 +8,8 @@ import OSLog
 struct DictationTarget {
   let application: NSRunningApplication?
   let icon: NSImage?
-  let supportedApplication: SupportedDictationApplication?
-}
-
-enum SupportedDictationApplication: String, CaseIterable {
-  case word
-  case powerPoint
-  case outlook
-  case protonMail
-
-  init?(bundleIdentifier: String?) {
-    switch bundleIdentifier?.lowercased() {
-    case "com.microsoft.word": self = .word
-    case "com.microsoft.powerpoint": self = .powerPoint
-    case "com.microsoft.outlook": self = .outlook
-    case "ch.protonmail.desktop": self = .protonMail
-    default: return nil
-    }
-  }
-
-  var name: String {
-    switch self {
-    case .word: return "Microsoft Word"
-    case .powerPoint: return "Microsoft PowerPoint"
-    case .outlook: return "Microsoft Outlook"
-    case .protonMail: return "Proton Mail"
-    }
-  }
+  let bundleIdentifier: String?
+  let applicationName: String?
 }
 
 @MainActor final class TextInsertionService {
@@ -47,17 +22,21 @@ enum SupportedDictationApplication: String, CaseIterable {
     let target = app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app
     let icon = target?.bundleURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
     return DictationTarget(
-      application: target, icon: icon,
-      supportedApplication: SupportedDictationApplication(bundleIdentifier: target?.bundleIdentifier))
+      application: target, icon: icon, bundleIdentifier: target?.bundleIdentifier,
+      applicationName: target?.localizedName)
   }
 
   func insert(
-    _ text: String, into target: DictationTarget, smartFormatting: Bool
+    _ text: String, into target: DictationTarget, smartFormatting: Bool,
+    formattingApplicationIDs: [String]
   ) throws -> FormattedDictation {
     guard AXIsProcessTrusted() else {
       throw VoiceInputError.accessibilityPermissionMissing
     }
-    let formatted = smartFormatting && target.supportedApplication != nil
+    let formattingEnabledForTarget = target.bundleIdentifier.map { targetID in
+      formattingApplicationIDs.contains { $0.caseInsensitiveCompare(targetID) == .orderedSame }
+    } ?? false
+    let formatted = smartFormatting && formattingEnabledForTarget
       ? DictationFormatter.format(text)
       : FormattedDictation(plainText: text, html: "", didApplyFormatting: false)
     let pasteboard = NSPasteboard.general
@@ -515,13 +494,14 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
   private func finishDictation(_ text: String, target: DictationTarget?) {
     do {
       let destination = target ?? insertion.captureTarget()
-      let smartFormatting = configProvider().dictation.smartFormatting
+      let dictationConfig = configProvider().dictation
       let inserted = try insertion.insert(
-        text, into: destination, smartFormatting: smartFormatting)
+        text, into: destination, smartFormatting: dictationConfig.smartFormatting,
+        formattingApplicationIDs: dictationConfig.formattingApplications)
       overlay.update(phase: .result, detail: inserted.plainText)
       overlay.hide(after: 1.4)
-      if inserted.didApplyFormatting, let app = destination.supportedApplication {
-        onStatus("Diktat für \(app.name) formatiert und eingefügt")
+      if inserted.didApplyFormatting, let appName = destination.applicationName {
+        onStatus("Diktat für \(appName) formatiert und eingefügt")
       } else {
         onStatus("Diktat eingefügt")
       }

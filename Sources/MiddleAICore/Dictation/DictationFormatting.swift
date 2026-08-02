@@ -23,6 +23,7 @@ public enum DictationFormatter {
     var changed = false
     text = applyPairedQuotes(to: text, changed: &changed)
     text = applyInlineQuotes(to: text, changed: &changed)
+    text = applyPunctuationCommands(to: text, changed: &changed)
     text = applyList(to: text, numbered: true, changed: &changed)
     text = applyList(to: text, numbered: false, changed: &changed)
     text = replacingCommand(
@@ -53,12 +54,28 @@ public enum DictationFormatter {
       in: input, with: "„$1“$2", changed: &changed)
   }
 
+  private static func applyPunctuationCommands(
+    to input: String, changed: inout Bool
+  ) -> String {
+    let commands = [
+      (#"(?i)\s*\bkomma\b(?!\s*(?:ist|war|wird|soll|bedeutet|heißt)\b)\s*"#, ", "),
+      (#"(?i)\s*\bdoppelpunkt\b(?!\s*(?:ist|war|wird|soll|bedeutet|heißt)\b)\s*"#, ": "),
+      (#"(?i)\s*\bsemikolon\b(?!\s*(?:ist|war|wird|soll|bedeutet|heißt)\b)\s*"#, "; "),
+      (#"(?i)\s*\bfragezeichen\b(?!\s*(?:ist|war|wird|soll|bedeutet|heißt)\b)\s*"#, "? "),
+      (#"(?i)\s*\bausrufezeichen\b(?!\s*(?:ist|war|wird|soll|bedeutet|heißt)\b)\s*"#, "! "),
+      (#"(?i)\s*\b(?:satzende|punkt\s+satzende)\b\s*"#, ". "),
+    ]
+    return commands.reduce(input) { result, command in
+      replacingCommand(command.0, in: result, with: command.1, changed: &changed)
+    }
+  }
+
   private static func applyList(
     to input: String, numbered: Bool, changed: inout Bool
   ) -> String {
     let startPattern = numbered
-      ? #"(?i)\b(?:nummerierte\s+liste|nummerierte\s+aufzählung)\s*(?:beginnen|anfang)?\s*[:,-]?\s*"#
-      : #"(?i)\b(?:(?:folgende\s+)?aufzählung|punkteliste|liste\s+mit\s+aufzählungszeichen)\s*(?:beginnen|anfang)?\s*[:,-]?\s*"#
+      ? #"(?i)\b(?:nummerierte\s+liste|nummerierte\s+aufzählung)\b\s*(?:beginnen|anfang)?\s*[:,-]?\s*"#
+      : #"(?i)\b(?:(?:folgende\s+)?aufzählung|punkteliste|liste\s+mit\s+aufzählungszeichen)\b\s*(?:beginnen|anfang)?\s*[:,-]?\s*"#
     guard let startExpression = try? NSRegularExpression(pattern: startPattern),
       let startMatch = startExpression.firstMatch(
         in: input, range: NSRange(input.startIndex..., in: input)),
@@ -74,7 +91,7 @@ public enum DictationFormatter {
     let bodyRange = NSRange(location: searchStart, length: bodyEnd - searchStart)
     guard let swiftBodyRange = Range(bodyRange, in: input) else { return input }
 
-    let separatorPattern = #"(?i)\s*\b(?:(?:nächster|neuer|weiterer)\s+punkt|punkt\s+(?:eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|\d+))\b\s*[:,-]?\s*"#
+    let separatorPattern = #"(?i)\s*(?<![\p{L}\p{N}])(?:(?:nächster|neuer|weiterer)\s+punkt|punkt\s+(?:eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|\d+)|nummer\s+(?:eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|\d+)|erstens|zweitens|drittens|viertens|fünftens|sechstens|siebtens|achtens|neuntens|zehntens|(?:als\s+)?(?:erstes|zweites|drittes|viertes|fünftes|sechstes|siebtes|achtes|neuntes|zehntes)|\d{1,2}\s*[.)])\s*[:,-]?\s*"#
     guard let separator = try? NSRegularExpression(pattern: separatorPattern) else { return input }
     let body = String(input[swiftBodyRange])
     var itemStart = body.startIndex
@@ -105,8 +122,10 @@ public enum DictationFormatter {
   }
 
   private static func cleanListItem(_ input: String) -> String {
-    input.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(
+    var result = input.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(
       CharacterSet(charactersIn: ",;:-")))
+    result = replacing(#"(?i)[,;:]?\s+und\s*$"#, in: result, with: "")
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private static func normalizeWhitespace(_ input: String) -> String {

@@ -268,6 +268,30 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       lastError = error.localizedDescription
     }
   }
+  func setDictationFormattingApplication(_ bundleIdentifier: String, enabled: Bool) {
+    let identifier = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !identifier.isEmpty else { return }
+    config.dictation.formattingApplications.removeAll {
+      $0.caseInsensitiveCompare(identifier) == .orderedSame
+    }
+    if enabled { config.dictation.formattingApplications.append(identifier) }
+    config.dictation.formattingApplications.sort {
+      $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+    }
+    do {
+      try ConfigLoader.save(config)
+      voiceStatus = enabled
+        ? "Formatierungsbefehle für die ausgewählte App aktiviert"
+        : "Formatierungsbefehle für die ausgewählte App deaktiviert"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func isDictationFormattingEnabled(for bundleIdentifier: String) -> Bool {
+    config.dictation.formattingApplications.contains {
+      $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+    }
+  }
   func setActivationKey(_ key: ActivationKeyChoice, for mode: VoiceMode) {
     let previousDictation = config.hotkeys.dictation
     let previousAssistant = config.hotkeys.assistant
