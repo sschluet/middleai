@@ -1,0 +1,12 @@
+profiles:
+  default:
+    model: ""
+  management:
+    model: ""
+  architecture:
+    model: ""
+    system_prompt: "Du bist ein Enterprise-IT-Architekt. Antworte technisch präzise."
+  coding:
+    model: ""
+  research:
+    model: ""

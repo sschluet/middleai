@@ -1,0 +1,22 @@
+#!/bin/zsh
+set -euo pipefail
+
+MIDDLEAI_COMMAND_URL=${MIDDLEAI_COMMAND_URL:-http://127.0.0.1:8765/command}
+if (( $# > 0 )); then
+  INPUT_TEXT="$*"
+else
+  INPUT_TEXT=$(</dev/stdin)
+fi
+
+if [[ -z "$INPUT_TEXT" ]]; then
+  echo "Usage: middleai-ask 'question' (or pipe the question on stdin)" >&2
+  exit 64
+fi
+
+/usr/bin/curl --fail-with-body --silent --show-error \
+  --connect-timeout 2 \
+  --max-time 5 \
+  -H 'Content-Type: text/plain; charset=utf-8' \
+  -H 'X-MiddleAI-Source: fluidvoice-command' \
+  --data-binary "$INPUT_TEXT" "$MIDDLEAI_COMMAND_URL"
+echo

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDevelopmentRegion</key><string>de</string>
+  <key>CFBundleExecutable</key><string>MiddleAI</string>
+  <key>CFBundleIdentifier</key><string>de.middleai.app</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>MiddleAI</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><false/>
+  <key>NSHumanReadableCopyright</key><string>MiddleAI local-first middleware</string>
+  <key>NSMicrophoneUsageDescription</key><string>MiddleAI uses the microphone for local dictation and voice questions.</string>
+  <key>NSAccessibilityUsageDescription</key><string>MiddleAI inserts locally transcribed dictation into the active text field and observes the left and right Option keys.</string>
+  <key>NSInputMonitoringUsageDescription</key><string>MiddleAI observes the left and right Option keys for push-to-talk without recording other keyboard input.</string>
+</dict></plist>

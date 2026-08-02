@@ -1,0 +1,20 @@
+#!/bin/zsh
+set -euo pipefail
+
+MIDDLEAI_API_URL=${MIDDLEAI_API_URL:-http://127.0.0.1:8765/input}
+if (( $# > 0 )); then
+  INPUT_TEXT="$*"
+else
+  INPUT_TEXT=$(</dev/stdin)
+fi
+
+if [[ -z "$INPUT_TEXT" ]]; then
+  echo "Usage: middleai-input 'text' (or pipe text on stdin)" >&2
+  exit 64
+fi
+
+/usr/bin/curl --fail-with-body --silent --show-error \
+  -H 'Content-Type: text/plain; charset=utf-8' \
+  -H 'X-MiddleAI-Source: fluidvoice' \
+  --data-binary "$INPUT_TEXT" "$MIDDLEAI_API_URL"
+echo
