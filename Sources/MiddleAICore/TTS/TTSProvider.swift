@@ -1404,7 +1404,14 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     try await primary.prepare()
   }
   public func speak(_ text: String) async throws {
-    do { try await primary.speak(text) } catch { try await fallback.speak(text) }
+    do {
+      try await primary.speak(text)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      try Task.checkCancellation()
+      try await fallback.speak(text)
+    }
   }
   public func stop() {
     primary.stop()
@@ -1416,12 +1423,13 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   private let provider: any TTSProvider
   private var pending: [String] = []
   private var task: Task<Void, Never>?
+  private var taskGeneration: UInt64 = 0
   public private(set) var enabled: Bool
   public init(provider: any TTSProvider, enabled: Bool = true) {
     self.provider = provider
     self.enabled = enabled
   }
-  public var isSpeaking: Bool { provider.isSpeaking || !pending.isEmpty }
+  public var isSpeaking: Bool { task != nil || provider.isSpeaking || !pending.isEmpty }
   public func prepare() async throws { try await provider.prepare() }
   public func enqueue(_ sentence: String) {
     guard enabled else { return }
@@ -1433,19 +1441,28 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     if !value { stop() }
   }
   public func stop() {
+    taskGeneration &+= 1
     pending.removeAll()
     provider.stop()
     task?.cancel()
     task = nil
   }
+  public func waitUntilIdle() async throws {
+    while isSpeaking {
+      try Task.checkCancellation()
+      try await Task.sleep(for: .milliseconds(40))
+    }
+  }
   private func startIfNeeded() {
     guard task == nil else { return }
+    taskGeneration &+= 1
+    let generation = taskGeneration
     task = Task { [weak self] in
       while let self, !Task.isCancelled, !self.pending.isEmpty {
         let next = self.pending.removeFirst()
         try? await self.provider.speak(next)
       }
-      self?.task = nil
+      if self?.taskGeneration == generation { self?.task = nil }
     }
   }
 }

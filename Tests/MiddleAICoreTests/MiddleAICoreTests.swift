@@ -86,6 +86,14 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertGreaterThan(summary.components(separatedBy: ".").count, 2)
   }
 
+  func testSpokenSummaryNeverEndsMidSentence() {
+    let longSentence = Array(repeating: "ausführlicher Inhalt", count: 250).joined(separator: " ")
+    let summary = SpokenResponseSummarizer.extractiveSummary(
+      longSentence, maximumWords: 40)
+
+    XCTAssertTrue(summary.hasSuffix("Die vollständige Antwort ist in MiddleAI sichtbar."))
+  }
+
   func testConversationCacheCanBeInspectedPurgedAndCleared() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-tests-\(UUID().uuidString)", isDirectory: true)

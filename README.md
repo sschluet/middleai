@@ -191,6 +191,8 @@ Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück
 
 Within the configured continuation window, a new voice request continues the active conversation and sends its prior user/assistant messages to OpenWebUI, OpenAI or OpenRouter. This keeps natural follow-ups such as “Warum ist das so?” in context even when they repeat no keywords. Say “Neue Frage” or “Neues Thema”, use the local “Neuer Chat” command, or open a new conversation from the menu to deliberately reset the context.
 
+The assistant overlay remains visible while the provider streams and until the local spoken response has actually finished. Pressing the configured assistant activation key again during generation or speech cancels the remote request, the local TTS queue and the overlay together.
+
 The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
 
 ## Profiles

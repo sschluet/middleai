@@ -46,7 +46,8 @@ public actor SpokenResponseSummarizer {
             let candidate = Self.plainText(result.content)
             if !candidate.isEmpty,
               candidate.count < clean.count,
-              candidate.split(whereSeparator: \Character.isWhitespace).count <= maximumWords + 20
+              candidate.split(whereSeparator: \Character.isWhitespace).count <= maximumWords + 20,
+              Self.endsAtSentenceBoundary(candidate)
             {
               return candidate
             }
@@ -114,7 +115,27 @@ public actor SpokenResponseSummarizer {
       if chosen.count >= 4 { break }
     }
     let result = chosen.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " ")
-    return result.isEmpty ? String(text.prefix(700)) : result
+    return result.isEmpty
+      ? sentenceSafeFallback(rawSentences, maximumWords: maximumWords) : result
+  }
+
+  private nonisolated static func sentenceSafeFallback(
+    _ rawSentences: [String], maximumWords: Int
+  ) -> String {
+    let sentences = rawSentences.map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter { !$0.isEmpty }
+    guard let first = sentences.first else { return "" }
+    let words = first.split(whereSeparator: \Character.isWhitespace)
+    if words.count <= max(220, maximumWords * 2) {
+      return endsAtSentenceBoundary(first) ? first : first + "."
+    }
+    let bounded = words.prefix(max(20, maximumWords)).joined(separator: " ")
+    return bounded + ". Die vollständige Antwort ist in MiddleAI sichtbar."
+  }
+
+  private nonisolated static func endsAtSentenceBoundary(_ text: String) -> Bool {
+    text.range(of: #"[.!?][\"'”’)]*$"#, options: .regularExpression) != nil
   }
 
   private nonisolated static func boundedSummaryInput(_ text: String) -> String {

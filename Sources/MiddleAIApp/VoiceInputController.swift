@@ -290,14 +290,20 @@ import OSLog
         let result = try await engine.handle(text: text, source: "voice-assistant")
         try Task.checkCancellation()
         await MainActor.run {
-          self.assistantRequestActive = false
-          self.processingTask = nil
           self.onResult(result)
           let answer = result.displayText
           if case .local = result { engine.ttsQueue.enqueue(answer) }
           self.overlay.update(phase: .result, detail: answer)
-          self.overlay.hide(after: 4.5)
-          self.onStatus(String(answer.prefix(60)))
+          self.onStatus("Antwort wird vollständig vorgelesen")
+        }
+        try await engine.ttsQueue.waitUntilIdle()
+        try Task.checkCancellation()
+        await MainActor.run {
+          self.assistantRequestActive = false
+          self.processingTask = nil
+          self.overlay.hide(after: 0.25)
+          self.onDismissed()
+          self.onStatus(self.readyStatus)
         }
       } catch is CancellationError {
         await MainActor.run {

@@ -355,6 +355,12 @@ struct FixedRouter: ConversationRoutingStrategy {
         && researchSummary.contains("nächster Schritt")
         && researchSummary.components(separatedBy: ".").count > 2,
       "research response is summarized beyond its first paragraph: \(researchSummary)")
+    let longSentence = Array(repeating: "ausführlicher Inhalt", count: 250).joined(separator: " ")
+    let sentenceSafeSummary = SpokenResponseSummarizer.extractiveSummary(
+      longSentence, maximumWords: 40)
+    try expect(
+      sentenceSafeSummary.hasSuffix("Die vollständige Antwort ist in MiddleAI sichtbar."),
+      "spoken fallback ends deliberately instead of mid-sentence")
     try expect(
       MiddleAIEngine.remoteScope("HTTPS://AI.EXAMPLE/") == "https://ai.example",
       "remote server scope normalization")
@@ -516,10 +522,24 @@ struct FixedRouter: ConversationRoutingStrategy {
     let queue = TTSQueue(provider: provider)
     queue.enqueue("One.")
     queue.enqueue("Two.")
-    try await Task.sleep(nanoseconds: 20_000_000)
+    try await queue.waitUntilIdle()
+    try expect(!queue.isSpeaking, "queue reports idle only after playback")
+    try expect(provider.spoken == ["One.", "Two."], "all queued speech completed")
+    queue.enqueue("Three.")
+    try await Task.sleep(nanoseconds: 1_000_000)
     queue.stop()
-    try expect(provider.spoken.contains("One."), "queued speech")
     try expect(provider.stopped, "barge-in")
+
+    let fallback = RecordingTTS()
+    let cancellingProvider = FallbackTTSProvider(
+      primary: CancellingTTS(), fallback: fallback)
+    do {
+      try await cancellingProvider.speak("Must not fall back after cancellation")
+      throw TestFailure.failed("TTS cancellation propagated")
+    } catch is CancellationError {
+      // Expected: barge-in must not start a fallback voice after cancelling the primary model.
+    }
+    try expect(fallback.spoken.isEmpty, "cancelled TTS does not start fallback playback")
   }
   @MainActor static func testResponseDelivery() async throws {
     let provider = RecordingTTS()
@@ -746,6 +766,11 @@ struct FixedRouter: ConversationRoutingStrategy {
     stopped = true
     isSpeaking = false
   }
+}
+@MainActor final class CancellingTTS: TTSProvider {
+  var isSpeaking = false
+  func speak(_ text: String) async throws { throw CancellationError() }
+  func stop() {}
 }
 struct StaticAuth: AuthProvider {
   func token(baseURL: URL, session: URLSession) async throws -> String { "test-token" }
