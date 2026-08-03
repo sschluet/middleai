@@ -7,6 +7,8 @@
 [![CI](https://github.com/sschluet/middleai/actions/workflows/ci.yml/badge.svg)](https://github.com/sschluet/middleai/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
+**Website:** [sschluet.github.io/middleai](https://sschluet.github.io/middleai/)
+
 MiddleAI is a local-first macOS voice layer for dictation and an existing private Open WebUI instance. It recognizes speech locally, selects the appropriate conversation automatically, keeps the canonical chat in Open WebUI, streams the answer and speaks complete sentences locally on the Mac.
 
 Tap the left Option key to start dictation and tap it again to finish, or hold it for push-to-talk. The right Option key works the same way for spoken requests to OpenWebUI. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.

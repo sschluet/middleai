@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#070911">
+    <meta
+      name="description"
+      content="MiddleAI ist die lokale Sprachschicht für macOS: Diktieren, OpenWebUI per Stimme nutzen und Antworten natürlich vorlesen lassen."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
+    <meta
+      property="og:description"
+      content="Lokales Diktat, intelligente OpenWebUI-Anfragen und natürliche Sprachausgabe – nativ für macOS."
+    >
+    <meta property="og:image" content="https://sschluet.github.io/middleai/assets/og.png">
+    <meta property="og:url" content="https://sschluet.github.io/middleai/">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
+    <meta
+      name="twitter:description"
+      content="Lokales Diktat und eine private Sprachschnittstelle zu OpenWebUI für macOS."
+    >
+    <meta name="twitter:image" content="https://sschluet.github.io/middleai/assets/og.png">
+    <link rel="canonical" href="https://sschluet.github.io/middleai/">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+    <link rel="stylesheet" href="styles.css">
+    <title>MiddleAI – Lokale Sprach-KI für macOS</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Zum Inhalt springen</a>
+
+    <header class="site-header" data-header>
+      <div class="nav-shell">
+        <a class="brand" href="#top" aria-label="MiddleAI Startseite">
+          <img src="assets/middleai-icon.png" alt="" width="42" height="42">
+          <span>MiddleAI</span>
+        </a>
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="main-nav">
+          <span></span><span></span>
+          <span class="sr-only">Navigation öffnen</span>
+        </button>
+        <nav id="main-nav" class="main-nav" aria-label="Hauptnavigation">
+          <a href="#features">Features</a>
+          <a href="#privacy">Datenschutz</a>
+          <a href="#requirements">Anforderungen</a>
+          <a href="#faq">FAQ</a>
+          <a class="nav-github" href="https://github.com/sschluet/middleai">GitHub</a>
+          <a class="button button-small download-link" href="https://github.com/sschluet/middleai/releases/latest">
+            Download
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section id="top" class="hero section-shell">
+        <div class="hero-glow hero-glow-one" aria-hidden="true"></div>
+        <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+        <div class="hero-copy reveal">
+          <div class="eyebrow"><span class="eyebrow-dot"></span> Lokal. Nativ. Open Source.</div>
+          <h1>Deine Stimme.<br><span>Dein Mac. Deine KI.</span></h1>
+          <p class="hero-lead">
+            MiddleAI verwandelt die beiden Optionstasten deines Macs in eine präzise
+            Diktierfunktion und eine private Sprachschnittstelle zu OpenWebUI.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary download-link" href="https://github.com/sschluet/middleai/releases/latest">
+              <span>Für Apple Silicon laden</span>
+              <span class="button-arrow" aria-hidden="true">↘</span>
+            </a>
+            <a class="button button-secondary" href="#how-it-works">So funktioniert es</a>
+          </div>
+          <div class="hero-meta">
+            <span class="version-label">Version 0.3.2</span>
+            <span>macOS 14+</span>
+            <span>Apache 2.0</span>
+          </div>
+        </div>
+
+        <div class="hero-visual reveal reveal-delay" aria-label="Vorschau der MiddleAI Sprachoberfläche">
+          <div class="orb orb-one" aria-hidden="true"></div>
+          <div class="orb orb-two" aria-hidden="true"></div>
+          <div class="mac-frame">
+            <div class="mac-camera" aria-hidden="true"></div>
+            <div class="desktop-menu">
+              <span class="mini-logo"><img src="assets/favicon.png" alt="" width="22" height="22">MiddleAI</span>
+              <span>Mo. 09:41</span>
+            </div>
+            <div class="voice-island">
+              <img src="assets/favicon.png" alt="" width="28" height="28">
+              <div class="island-status">
+                <strong>MiddleAI hört zu</strong>
+                <span>Lokale Spracherkennung</span>
+              </div>
+              <div class="wave-bars" aria-hidden="true">
+                <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+              </div>
+            </div>
+            <div class="app-preview">
+              <aside class="preview-sidebar">
+                <div class="preview-avatar"><img src="assets/favicon.png" alt="" width="34" height="34"></div>
+                <span class="active"></span><span></span><span></span><span></span>
+              </aside>
+              <div class="preview-content">
+                <div class="preview-heading">
+                  <div><small>SPRACHEINGABE</small><strong>Lokal auf deinem Mac</strong></div>
+                  <span class="status-pill">Bereit</span>
+                </div>
+                <div class="setting-card">
+                  <div class="setting-row"><span class="setting-icon">STT</span><div><strong>Parakeet TDT v3</strong><small>Deutsch · Int8 · Core ML</small></div><b>Aktiv</b></div>
+                  <div class="level-line"><span></span></div>
+                </div>
+                <div class="shortcut-grid">
+                  <div><span class="keycap">⌥ L</span><strong>Diktieren</strong><small>In jede App</small></div>
+                  <div><span class="keycap accent">⌥ R</span><strong>MiddleAI</strong><small>OpenWebUI fragen</small></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="floating-card floating-local"><span></span>Audio bleibt lokal</div>
+          <div class="floating-card floating-latency"><strong>&lt; 1 s</strong><small>Startbereit</small></div>
+        </div>
+      </section>
+
+      <section class="trust-strip" aria-label="Produktmerkmale">
+        <div class="section-shell trust-grid">
+          <div><strong>100 % lokal</strong><span>STT und TTS auf deinem Mac</span></div>
+          <div><strong>2 Tasten</strong><span>Diktat und KI jederzeit bereit</span></div>
+          <div><strong>Private KI</strong><span>Deine bestehende OpenWebUI</span></div>
+          <div><strong>Open Source</strong><span>Transparent unter Apache 2.0</span></div>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="section section-shell split-intro">
+        <div class="section-kicker reveal">Zwei Tasten. Zwei Modi.</div>
+        <div class="split-heading reveal">
+          <h2>Sprache wird zum<br><span>schnellsten Interface.</span></h2>
+          <p>
+            Kein Fenster suchen, keinen Fokus verlieren. Tippe oder halte eine Optionstaste,
+            sprich natürlich und MiddleAI übernimmt den passenden Workflow.
+          </p>
+        </div>
+        <div class="mode-grid">
+          <article class="mode-card mode-dictation reveal">
+            <div class="mode-topline"><span>01</span><span>DIKTATMODUS</span></div>
+            <div class="mode-key" aria-hidden="true">⌥<small>links</small></div>
+            <h3>Sprich in jede App.</h3>
+            <p>
+              Sprache wird lokal erkannt, behutsam geglättet und in das aktive Textfeld
+              eingefügt. Formatierungsbefehle erzeugen Absätze, Zitate und Listen.
+            </p>
+            <div class="app-chips"><span>Word</span><span>PowerPoint</span><span>Outlook</span><span>Mail</span></div>
+          </article>
+          <article class="mode-card mode-assistant reveal reveal-delay">
+            <div class="mode-topline"><span>02</span><span>ASSISTENTENMODUS</span></div>
+            <div class="mode-key mode-key-accent" aria-hidden="true">⌥<small>rechts</small></div>
+            <h3>Frag deine private KI.</h3>
+            <p>
+              Die Anfrage geht an dein OpenWebUI-Modell. MiddleAI findet den passenden Chat,
+              wartet auf die vollständige Antwort und liest eine kompakte Fassung vor.
+            </p>
+            <div class="conversation-line"><i></i><span>Kontext erkannt</span><b>OpenWebUI</b></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="features" class="section section-shell">
+        <div class="section-heading centered reveal">
+          <div class="section-kicker">Gebaut für den täglichen Flow</div>
+          <h2>Alles, was zwischen<br><span>Gedanke und Ergebnis fehlt.</span></h2>
+          <p>Eine native macOS-App statt eines weiteren Browser-Tabs.</p>
+        </div>
+        <div class="bento-grid">
+          <article class="feature-card feature-wide reveal">
+            <div class="feature-number">01</div>
+            <div class="feature-copy">
+              <h3>Lokale Spracherkennung</h3>
+              <p>Parakeet TDT v3 verarbeitet dein Mikrofon vollständig auf dem Mac. Wähle das Eingabegerät, teste den Pegel und optimiere Qualität oder Speicherbedarf.</p>
+              <div class="feature-tags"><span>Core ML</span><span>Deutsch</span><span>Offline</span></div>
+            </div>
+            <div class="audio-panel" aria-hidden="true">
+              <div class="audio-title"><span></span><b>MacBook Pro-Mikrofon</b><small>Live</small></div>
+              <div class="audio-wave">
+                <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+              </div>
+              <div class="audio-footer"><span>16 kHz</span><span>Int8</span><span>Automatisch</span></div>
+            </div>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">02</div>
+            <h3>Natürliches Diktat</h3>
+            <p>Füllwörter und direkte Wiederholungen verschwinden, während Bedeutung, Namen, Zahlen und Fachbegriffe erhalten bleiben.</p>
+            <div class="before-after">
+              <div><small>GESPROCHEN</small><del>Ähm, wir sollten vielleicht mal</del></div>
+              <div><small>EINGEFÜGT</small><strong>Wir sollten die Planung morgen abschließen.</strong></div>
+            </div>
+          </article>
+
+          <article class="feature-card reveal reveal-delay">
+            <div class="feature-number">03</div>
+            <h3>Kontext statt Chat-Chaos</h3>
+            <p>Ein hybrides lokales Routing entscheidet, ob deine Frage zum aktuellen, einem früheren oder einem neuen Gespräch gehört.</p>
+            <div class="route-map" aria-hidden="true">
+              <div class="route-node source">Stimme</div><span></span>
+              <div class="route-options"><i>Aktuell</i><i>Vorherig</i><i>Neu</i></div>
+            </div>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">04</div>
+            <h3>Natürliche lokale Stimmen</h3>
+            <p>Wähle zwischen mehreren lokalen TTS-Modellen und Stimmen. Hörproben, Downloadfortschritt und Modellverwaltung sind direkt integriert.</p>
+            <div class="voice-choices"><span class="selected"><i></i>Clara</span><span><i></i>Sophie</span><span><i></i>Mia</span></div>
+          </article>
+
+          <article class="feature-card feature-dark reveal reveal-delay">
+            <div class="feature-number">05</div>
+            <h3>Ein Overlay, das auf den Mac gehört.</h3>
+            <p>Unter der MacBook-Notch oder freischwebend am externen Display: kompakt, fokussiert und immer sichtbar.</p>
+            <div class="mini-island"><img src="assets/favicon.png" alt="" width="24" height="24"><span>Antwort wird zusammengefasst</span><i></i><i></i><i></i></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="privacy" class="section privacy-section">
+        <div class="section-shell privacy-grid">
+          <div class="privacy-copy reveal">
+            <div class="section-kicker">Privacy by design</div>
+            <h2>Deine Stimme<br><span>verlässt den Mac nicht.</span></h2>
+            <p>
+              Mikrofonaufnahme, Transkription, Diktatkorrektur, Zusammenfassung und
+              Sprachausgabe laufen lokal. Nur die fertige Assistentenanfrage wird an die von
+              dir konfigurierte OpenWebUI gesendet.
+            </p>
+            <ul class="check-list">
+              <li><span>✓</span>Keine Cloud-STT- oder Cloud-TTS-Dienste</li>
+              <li><span>✓</span>Zugangsdaten sicher im macOS-Schlüsselbund</li>
+              <li><span>✓</span>Lokale API ausschließlich auf 127.0.0.1</li>
+              <li><span>✓</span>Open-Source-Code und reproduzierbare Releases</li>
+            </ul>
+            <a class="text-link" href="https://github.com/sschluet/middleai/blob/main/SECURITY.md">Sicherheitskonzept lesen <span>→</span></a>
+          </div>
+          <div class="privacy-diagram reveal reveal-delay" aria-label="Datenfluss von MiddleAI">
+            <div class="device-shell">
+              <div class="device-title"><span class="device-dot"></span><strong>Dein Mac</strong><small>Lokale Verarbeitung</small></div>
+              <div class="local-process"><b>1</b><span>Mikrofon</span><small>Audio im Arbeitsspeicher</small></div>
+              <div class="flow-line"></div>
+              <div class="local-process"><b>2</b><span>Parakeet STT</span><small>Lokale Transkription</small></div>
+              <div class="flow-line"></div>
+              <div class="local-process"><b>3</b><span>Text & Routing</span><small>Lokale Entscheidung</small></div>
+              <div class="local-result"><span>DIKTAT</span><b>Direkt in die Ziel-App</b><small>Der Text bleibt lokal.</small></div>
+            </div>
+            <div class="secure-bridge"><span>Nur Assistentenanfragen</span><i></i><small>TLS</small></div>
+            <div class="webui-node"><span>PRIVATE INSTANZ</span><strong>OpenWebUI</strong><small>Dein Modell. Deine Datenhoheit.</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-shell intelligence-section">
+        <div class="intelligence-card reveal">
+          <div class="intelligence-copy">
+            <div class="section-kicker">Lokale Intelligenz nach Wahl</div>
+            <h2>Du bestimmst,<br><span>was auf deinem Mac denkt.</span></h2>
+            <p>Nutze Apple Intelligence, einen lokalen Ollama- oder llama.cpp-Server oder ausschließlich die eingebauten MiddleAI-Regeln. OpenWebUI bleibt immer für die eigentliche Antwort zuständig.</p>
+          </div>
+          <div class="provider-stack" aria-label="Unterstützte lokale Intelligenzquellen">
+            <div class="provider selected"><span>AI</span><div><strong>Apple Intelligence</strong><small>On-device Systemmodell</small></div><i>Empfohlen</i></div>
+            <div class="provider"><span>OL</span><div><strong>Ollama</strong><small>Eigener lokaler Server</small></div><i>Lokal</i></div>
+            <div class="provider"><span>LC</span><div><strong>llama.cpp</strong><small>Lokale /v1-Schnittstelle</small></div><i>Lokal</i></div>
+            <div class="provider"><span>MA</span><div><strong>MiddleAI-Regeln</strong><small>Ohne zusätzliches Modell</small></div><i>Robust</i></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="requirements" class="section section-shell requirements-section">
+        <div class="section-heading centered reveal">
+          <div class="section-kicker">Systemanforderungen</div>
+          <h2>Gemacht für<br><span>Apple Silicon.</span></h2>
+        </div>
+        <div class="requirements-grid">
+          <div class="requirement reveal"><span>01</span><small>MAC</small><strong>Apple Silicon M1+</strong><p>M2 oder neuer empfohlen</p></div>
+          <div class="requirement reveal"><span>02</span><small>MACOS</small><strong>macOS 14+</strong><p>macOS 26 für Apple Intelligence</p></div>
+          <div class="requirement reveal"><span>03</span><small>ARBEITSSPEICHER</small><strong>8 GB minimum</strong><p>16 GB oder mehr empfohlen</p></div>
+          <div class="requirement reveal"><span>04</span><small>SPEICHER</small><strong>Ab 5 GB frei</strong><p>12–15 GB für alle Modelle</p></div>
+        </div>
+        <p class="requirements-note">Die App ist derzeit arm64-only. Sprachmodelle werden beim ersten Einsatz heruntergeladen und anschließend lokal verwendet.</p>
+      </section>
+
+      <section class="section download-section">
+        <div class="section-shell download-card reveal">
+          <div class="download-glow" aria-hidden="true"></div>
+          <img src="assets/middleai-icon.png" alt="MiddleAI App-Icon" width="150" height="150">
+          <div class="download-copy">
+            <div class="section-kicker">Bereit, weniger zu tippen?</div>
+            <h2>Bring deine Stimme<br><span>in deinen Workflow.</span></h2>
+            <p>Open Source, lokal und in wenigen Minuten eingerichtet.</p>
+            <div class="hero-actions">
+              <a class="button button-primary download-link" href="https://github.com/sschluet/middleai/releases/latest">
+                MiddleAI herunterladen <span class="button-arrow" aria-hidden="true">↘</span>
+              </a>
+              <a class="button button-secondary" href="https://github.com/sschluet/middleai">Auf GitHub ansehen</a>
+            </div>
+            <div class="install-steps">
+              <span><b>1</b> ZIP entpacken</span><i></i><span><b>2</b> Nach Programme bewegen</span><i></i><span><b>3</b> Einrichten</span>
+            </div>
+            <small class="signing-note">Aktueller Entwicklungsbuild: ad-hoc signiert und noch nicht notarisiert. Beim ersten Start kann Rechtsklick und „Öffnen“ erforderlich sein.</small>
+          </div>
+        </div>
+      </section>
+
+      <section id="faq" class="section section-shell faq-section">
+        <div class="faq-heading reveal">
+          <div class="section-kicker">Häufige Fragen</div>
+          <h2>Noch etwas<br><span>unklar?</span></h2>
+        </div>
+        <div class="faq-list reveal reveal-delay">
+          <details>
+            <summary>Läuft MiddleAI vollständig offline?<span>+</span></summary>
+            <p>Spracherkennung, Diktatkorrektur und Sprachausgabe laufen nach dem Modelldownload lokal. Für Assistentenanfragen benötigt MiddleAI Zugriff auf deine konfigurierte OpenWebUI-Instanz.</p>
+          </details>
+          <details>
+            <summary>Kann ich MiddleAI auf einen anderen Mac kopieren?<span>+</span></summary>
+            <p>Ja. Die App selbst ist eigenständig. Zugangsdaten, Berechtigungen, Einstellungen und Sprachmodelle werden aus Sicherheits- und Speichergründen auf jedem Mac separat eingerichtet.</p>
+          </details>
+          <details>
+            <summary>Welche Anwendungen unterstützt der Diktatmodus?<span>+</span></summary>
+            <p>Einfacher Text funktioniert in praktisch jedem fokussierten Textfeld. Erweiterte Formatierungen sind standardmäßig für Word, PowerPoint, Outlook und Proton Mail aktiviert; weitere Apps lassen sich hinzufügen.</p>
+          </details>
+          <details>
+            <summary>Brauche ich Apple Intelligence?<span>+</span></summary>
+            <p>Nein. MiddleAI funktioniert ab macOS 14. Apple Intelligence verbessert auf kompatiblen Macs optional Diktatglättung, Zusammenfassungen und mehrdeutiges Chat-Routing.</p>
+          </details>
+          <details>
+            <summary>Ist MiddleAI kostenlos?<span>+</span></summary>
+            <p>MiddleAI ist unter der Apache-2.0-Lizenz als Open Source verfügbar. Beachte die separaten Lizenzen optionaler Sprachmodelle und die Betriebskosten deiner eigenen OpenWebUI-Infrastruktur.</p>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="section-shell footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="#top"><img src="assets/favicon.png" alt="" width="36" height="36"><span>MiddleAI</span></a>
+          <p>Eine lokale Sprachschicht für macOS und deine private KI.</p>
+        </div>
+        <div class="footer-links">
+          <div><strong>Produkt</strong><a href="#features">Features</a><a href="#privacy">Datenschutz</a><a href="#requirements">Anforderungen</a></div>
+          <div><strong>Projekt</strong><a href="https://github.com/sschluet/middleai">GitHub</a><a href="https://github.com/sschluet/middleai/releases">Releases</a><a href="https://github.com/sschluet/middleai/blob/main/LICENSE">Lizenz</a></div>
+          <div><strong>Dokumentation</strong><a href="https://github.com/sschluet/middleai#first-start">Erste Schritte</a><a href="https://github.com/sschluet/middleai/blob/main/SECURITY.md">Sicherheit</a><a href="https://github.com/sschluet/middleai/issues">Support</a></div>
+        </div>
+      </div>
+      <div class="section-shell footer-bottom"><span>© <span data-year></span> MiddleAI</span><span>Designed for macOS. Built in Swift.</span></div>
+    </footer>
+
+    <script src="site.js" defer></script>
+  </body>
+</html>
