@@ -44,7 +44,11 @@ let package = Package(
         "MiddleAICore",
         .product(name: "FluidAudio", package: "FluidAudio"),
       ],
-      resources: [.process("Resources")]
+      resources: [.process("Resources")],
+      linkerSettings: [
+        .linkedFramework("AudioToolbox"),
+        .linkedFramework("CoreAudio"),
+      ]
     ),
     .executableTarget(name: "MiddleAITestRunner", dependencies: ["MiddleAICore"]),
     .testTarget(name: "MiddleAICoreTests", dependencies: ["MiddleAICore"]),

@@ -76,6 +76,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.stt.encoderPrecision = "int4"
     c.stt.computeMode = "fast"
     c.stt.language = "auto"
+    c.stt.inputDeviceUID = "test-input-device"
     c.privacy.localCacheRetentionDays = 365
     let rendered = ConfigLoader.renderYAML(c)
     let parsed = try ConfigLoader.parseYAML(rendered)
@@ -114,7 +115,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
     try expect(
       parsed.stt.encoderPrecision == "int4" && parsed.stt.computeMode == "fast"
-        && parsed.stt.language == "auto",
+        && parsed.stt.language == "auto" && parsed.stt.inputDeviceUID == "test-input-device",
       "STT settings round-trip")
     try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
     try expect(AppConfig().api.tokenRequired, "secure API default")

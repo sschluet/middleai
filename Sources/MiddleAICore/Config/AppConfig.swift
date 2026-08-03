@@ -43,6 +43,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var computeMode = "efficient"
     /// Improves multilingual recordings longer than roughly 30 seconds at extra compute cost.
     public var longFormMode = "accurate"
+    /// Core Audio device UID, or `system_default` to follow the macOS input selection.
+    public var inputDeviceUID = "system_default"
   }
   public struct Dictation: Codable, Equatable, Sendable {
     public static let defaultFormattingApplications = [
@@ -271,6 +273,7 @@ public enum ConfigLoader {
       case ("stt", "encoder_precision"): c.stt.encoderPrecision = value
       case ("stt", "compute_mode"): c.stt.computeMode = value
       case ("stt", "long_form_mode"): c.stt.longFormMode = value
+      case ("stt", "input_device_uid"): c.stt.inputDeviceUID = value
       case ("dictation", "polish_with_local_ai"):
         c.dictation.polishWithLocalAI = try legacyBool(value, line: index)
       case ("dictation", "smart_formatting"):
@@ -355,7 +358,8 @@ public enum ConfigLoader {
       ["de", "auto"].contains(c.stt.language),
       ["int8", "int4"].contains(c.stt.encoderPrecision),
       ["efficient", "fast"].contains(c.stt.computeMode),
-      ["accurate", "fast"].contains(c.stt.longFormMode)
+      ["accurate", "fast"].contains(c.stt.longFormMode),
+      !c.stt.inputDeviceUID.isEmpty, c.stt.inputDeviceUID.count <= 512
     else {
       throw MiddleAIError.configuration("STT settings are invalid")
     }

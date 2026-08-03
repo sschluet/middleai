@@ -17,6 +17,7 @@ final class MiddleAICoreTests: XCTestCase {
     config.stt.encoderPrecision = "int4"
     config.stt.computeMode = "fast"
     config.stt.longFormMode = "fast"
+    config.stt.inputDeviceUID = "test-input-device"
     let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
     XCTAssertEqual(parsed.stt, config.stt)
   }

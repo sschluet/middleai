@@ -250,7 +250,7 @@ public enum SpeechTextProcessor {
 
   private static let explicitEnglishWords: Set<String> = [
     "ai", "api", "app", "apple", "assistant", "backend", "benchmark", "browser",
-    "business", "chat", "chatgpt", "cloud", "code", "codex", "command", "dashboard",
+    "business", "chat", "cloud", "code", "command", "dashboard",
     "database", "deep", "desktop", "download", "edge", "engine", "feature", "feedback",
     "frontend", "github", "hardware", "interface", "island", "learning",
     "macbook", "macos", "management", "meeting", "middleai", "microsoft", "model",
@@ -272,9 +272,7 @@ public enum SpeechTextProcessor {
 
   private static let germanPronunciationAliases: [(String, String)] = [
     ("OpenWebUI", "Oupen Web Ju Ei"),
-    ("ChatGPT", "Tschätt Dschi Pi Ti"),
     ("MiddleAI", "Middel Ei Ai"),
-    ("OpenAI", "Oupen Ei Ai"),
     ("Microsoft", "Maikrosoft"),
     ("MacBook", "Mäckbuck"),
     ("Workflow", "Wörkfloh"),

@@ -154,7 +154,7 @@ import OSLog
     dictationTarget = mode == .dictation ? insertion.captureTarget() : nil
     overlay.show(mode: mode, targetIcon: dictationTarget?.icon)
     do {
-      try recorder.start { [weak self] level in
+      try recorder.start(deviceUID: configProvider().stt.inputDeviceUID) { [weak self] level in
         Task { @MainActor in self?.overlay.setLevel(level) }
       }
       onStatus(mode == .dictation ? "Diktat läuft" : "MiddleAI hört zu")
@@ -188,10 +188,20 @@ import OSLog
     latchedMode = nil
     recordingStartedAt = nil
     let audio = recorder.stop()
+    logger.notice(
+      "recording_finished mode=\(mode == .dictation ? "dictation" : "assistant", privacy: .public) duration_ms=\(Int(audio.duration * 1_000), privacy: .public) samples=\(audio.samples.count, privacy: .public) peak=\(audio.peakLevel, privacy: .public) device=\(audio.deviceName, privacy: .public)"
+    )
     let target = dictationTarget
     dictationTarget = nil
     guard audio.duration >= 0.25, audio.samples.count >= 1_600 else {
       dismissSilently()
+      return
+    }
+    if audio.duration >= 0.7, audio.peakLevel < 0.01 {
+      fail(
+        VoiceCaptureError.noAudioSignal(
+          "Vom Mikrofon „\(audio.deviceName)“ kam kein Audiosignal. Bitte das Mikrofon prüfen oder unter Einstellungen > Spracheingabe ein anderes auswählen."
+        ))
       return
     }
     overlay.update(phase: .transcribing, detail: "Parakeet TDT v3 verarbeitet die Aufnahme lokal")
@@ -228,7 +238,14 @@ import OSLog
       } catch let error as VoiceCaptureError {
         await MainActor.run {
           switch error {
-          case .recordingTooShort, .emptyTranscription: self.dismissSilently()
+          case .recordingTooShort: self.dismissSilently()
+          case .emptyTranscription:
+            if audio.duration >= 0.7 {
+              self.fail(error)
+            } else {
+              self.dismissSilently()
+            }
+          case .noAudioSignal: self.fail(error)
           default: self.fail(error)
           }
         }

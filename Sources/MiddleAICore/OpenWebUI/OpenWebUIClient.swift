@@ -192,7 +192,7 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
       }
     } catch let StreamingFailure.rejected(status, _) where Self.supportsNonStreamingFallback(status)
     {
-      // Some OpenWebUI adapters only expose the OpenAI-compatible non-streaming response over
+      // Some OpenWebUI adapters only expose a non-streaming chat-completions response over
       // HTTP. Retrying is safe here because a rejected request did not start a generation.
       body["stream"] = false
       let data = try await request(path: "api/chat/completions", method: "POST", json: body).0

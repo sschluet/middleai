@@ -52,6 +52,7 @@ struct SettingsView: View {
   @State private var ttsModelToDelete: TTSModelDownloadStatus?
   @State private var showsVoxtralLicenseConfirmation = false
   @State private var confirmsCacheDeletion = false
+  @State private var audioInputDevices = AudioInputDeviceCatalog.availableDevices()
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
@@ -376,9 +377,61 @@ struct SettingsView: View {
             .foregroundStyle(Color.accentColor)
             .frame(width: 30)
           VStack(alignment: .leading, spacing: 4) {
-            Text("NVIDIA Parakeet TDT 0.6B v3").font(.callout.weight(.semibold))
+            Text("Parakeet TDT 0.6B v3").font(.callout.weight(.semibold))
             Text(
-              "Mehrsprachiges Modell mit rund 600 Millionen Parametern. FluidAudio lädt die Core-ML-Variante einmalig und führt Encoder und Decoder anschließend lokal aus. Audio wird auf 16 kHz normalisiert und nicht gespeichert."
+              "Mehrsprachiges Modell mit rund 600 Millionen Parametern. MiddleAI lädt die Core-ML-Dateien einmalig und führt Encoder und Decoder anschließend vollständig lokal aus. Die Aufnahme wird intern auf 16 kHz normalisiert, nur im Arbeitsspeicher verarbeitet und nicht gespeichert."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+          }
+        }
+        Divider()
+        VStack(alignment: .leading, spacing: 7) {
+          HStack {
+            Picker("Mikrofon", selection: $state.config.stt.inputDeviceUID) {
+              Text(systemDefaultMicrophoneLabel).tag(AudioInputDeviceCatalog.systemDefaultUID)
+              ForEach(audioInputDevices) { device in
+                Text(device.name).tag(device.uid)
+              }
+              if state.config.stt.inputDeviceUID != AudioInputDeviceCatalog.systemDefaultUID,
+                !audioInputDevices.contains(where: { $0.uid == state.config.stt.inputDeviceUID })
+              {
+                Text("Nicht verfügbares Mikrofon").tag(state.config.stt.inputDeviceUID)
+              }
+            }
+            .pickerStyle(.menu)
+            Button {
+              audioInputDevices = AudioInputDeviceCatalog.availableDevices()
+            } label: {
+              Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("Liste der angeschlossenen Mikrofone neu laden")
+          }
+          Text(
+            "Bestimmt, von welchem Gerät MiddleAI Audio aufnimmt. „macOS-Standard“ folgt der Auswahl unter Systemeinstellungen > Ton > Eingabe. Wähle ein Gerät fest aus, wenn ein Monitor, Headset oder Konferenzlautsprecher versehentlich als Standard aktiv wird."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          Label(selectedMicrophoneStatus, systemImage: "mic.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+          HStack(spacing: 10) {
+            Button(state.isTestingMicrophone ? "Test läuft …" : "Mikrofon 2,5 Sekunden testen") {
+              state.testSelectedMicrophone()
+            }
+            .buttonStyle(.bordered)
+            .disabled(state.isTestingMicrophone)
+            ProgressView(value: state.microphoneTestLevel, total: 1)
+              .frame(maxWidth: 150)
+            Text(state.microphoneTestStatus)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(2)
+          }
+          HStack(spacing: 8) {
+            Button("Mikrofonfreigabe öffnen") { openMicrophonePrivacySettings() }
+              .buttonStyle(.borderless)
+            Text(
+              "Falls kein Audiostream ankommt: zuerst ein anderes Mikrofon testen. Bleibt der Fehler bei allen Geräten bestehen, MiddleAI unter Datenschutz & Sicherheit > Mikrofon einmal aus- und wieder einschalten."
             )
             .font(.caption).foregroundStyle(.secondary)
           }
@@ -391,8 +444,8 @@ struct SettingsView: View {
         .pickerStyle(.menu)
         Text(
           state.config.stt.language == "de"
-            ? "Der Deutschmodus verwirft Zeichen aus unpassenden Schriftsystemen und reduziert dadurch fremdsprachige Ausreißer. Fachbegriffe und englische Wörter in lateinischer Schrift bleiben möglich."
-            : "Automatisch lässt die mehrsprachige Decodierung ungefiltert. Das ist sinnvoll, wenn du regelmäßig zwischen unterschiedlichen Schriftsystemen wechselst."
+            ? "Deutsch ist kein zweites Modell, sondern ein Schutzfilter im Decoder. Er verhindert vor allem Ausreißer in andere Schriftsysteme. Deutsche Sätze, Namen und englische Fachbegriffe mit lateinischen Buchstaben bleiben möglich."
+            : "Mehrsprachig deaktiviert den Schriftfilter. Nutze das nur, wenn du regelmäßig ganze Passagen in Sprachen mit anderen Schriftsystemen diktierst; für deutsches Diktat ist dieser Modus meist weniger stabil."
         )
         .font(.caption).foregroundStyle(.secondary)
         Picker("Encoder", selection: $state.config.stt.encoderPrecision) {
@@ -401,21 +454,30 @@ struct SettingsView: View {
         }
         .pickerStyle(.segmented)
         Text(
-          "Int8 ist die empfohlene Qualitätsstufe. Int4 benötigt weniger Speicher und kann beim ersten Wechsel einen zusätzlichen Encoder-Download auslösen."
+          "Der Encoder wandelt das Audiosignal in Merkmale für den Textdecoder um. Int8 ist die Qualitätsvorgabe und bereits heruntergeladen. Int4 spart Modell- und Arbeitsspeicher, kann die Erkennung schwieriger Namen aber etwas verschlechtern und wird beim ersten Wechsel separat geladen."
         )
         .font(.caption).foregroundStyle(.secondary)
         Picker("Beschleunigung", selection: $state.config.stt.computeMode) {
-          Text("Neural Engine · effizient").tag("efficient")
-          Text("GPU · schneller").tag("fast")
+          Text("Automatisch · empfohlen").tag("efficient")
+          Text("CPU + GPU · kompatibel").tag("fast")
         }
         .pickerStyle(.segmented)
+        Text(
+          "Automatisch lässt Core ML die passende Kombination aus CPU, GPU und Neural Engine wählen. CPU + GPU schließt die Neural Engine aus und ist nur als Kompatibilitätsoption sinnvoll, wenn die automatische Ausführung auf einem bestimmten Mac Probleme verursacht."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         Picker("Lange Diktate", selection: $state.config.stt.longFormMode) {
           Text("Genauer · empfohlen").tag("accurate")
           Text("Schneller").tag("fast")
         }
         .pickerStyle(.segmented)
         Text(
-          "Die Einstellung für lange Diktate wirkt vor allem ab ungefähr 30 Sekunden. „Genauer“ vergleicht bei schwierigen Übergängen mehrere lokale Decodierungswege."
+          "Diese Einstellung greift erst bei längeren Aufnahmen. „Genauer“ prüft am Anfang mehrere Segmentierungswege und reduziert ausgelassene oder doppelte Wörter an Übergängen. „Schneller“ verwendet nur einen Weg und benötigt weniger Rechenzeit."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Label(
+          "Änderungen gelten nach „STT-Einstellungen anwenden“ für die nächste Aufnahme. Ein Wechsel der Encoder-Stufe kann beim ersten Mal einen Modelldownload auslösen.",
+          systemImage: "info.circle"
         )
         .font(.caption).foregroundStyle(.secondary)
         HStack {
@@ -600,7 +662,7 @@ struct SettingsView: View {
         ) {
           Text("Apple Intelligence · empfohlen").tag("apple")
           Text("Ollama · eigener lokaler Server").tag("ollama")
-          Text("llama.cpp · OpenAI-kompatibler Server").tag("llama_cpp")
+          Text("llama.cpp · lokaler /v1-Server").tag("llama_cpp")
           Text("Nur MiddleAI-Regeln · ohne KI-Modell").tag("rules")
         }
         .pickerStyle(.menu)
@@ -840,6 +902,21 @@ struct SettingsView: View {
     }
   }
 
+  private var systemDefaultMicrophoneLabel: String {
+    let defaultName = audioInputDevices.first(where: \AudioInputDevice.isSystemDefault)?.name
+    return defaultName.map { "macOS-Standard · \($0)" } ?? "macOS-Standard"
+  }
+
+  private var selectedMicrophoneStatus: String {
+    if state.config.stt.inputDeviceUID == AudioInputDeviceCatalog.systemDefaultUID {
+      return "Aktiv: \(systemDefaultMicrophoneLabel)"
+    }
+    if let device = audioInputDevices.first(where: { $0.uid == state.config.stt.inputDeviceUID }) {
+      return "Fest ausgewählt: \(device.name)"
+    }
+    return "Das gespeicherte Mikrofon ist derzeit nicht angeschlossen"
+  }
+
   private var intelligenceProviderDescription: String {
     switch state.intelligenceProviderChoice {
     case "apple":
@@ -847,10 +924,10 @@ struct SettingsView: View {
         "Apple Intelligence läuft über das macOS-Systemmodell, benötigt keinen separaten Download in MiddleAI und bekommt nur dann Kontext, wenn Hybridregeln bei der Chat-Auswahl uneinig sind. Nicht verfügbar auf diesem Mac? Dann bleiben die eingebauten Regeln aktiv."
     case "ollama":
       return
-        "Ollama stellt ein selbst gewähltes lokales Modell bereit. MiddleAI verwendet dessen OpenAI-kompatible API ausschließlich als Entscheidungshilfe für mehrdeutige Chat-Zuordnungen."
+        "Ollama stellt ein selbst gewähltes lokales Modell bereit. MiddleAI verwendet dessen lokale /v1-API ausschließlich als Entscheidungshilfe für mehrdeutige Chat-Zuordnungen."
     case "llama_cpp":
       return
-        "llama.cpp wird über seine lokale OpenAI-kompatible Server-API angesprochen. Für deinen Mac ist http://127.0.0.1:18881 voreingestellt. MiddleAI startet oder lädt den Server selbst nicht."
+        "llama.cpp wird über die lokalen Endpunkte /v1/models und /v1/chat/completions angesprochen. Für deinen Mac ist http://127.0.0.1:18881 voreingestellt. MiddleAI startet oder lädt den Server selbst nicht."
     default:
       return
         "MiddleAI nutzt nur Zeitabstand, Begriffe und lokale Ähnlichkeit. Das braucht weder Apple Intelligence noch einen Modellserver und ist der robusteste Rückfallmodus."
@@ -974,6 +1051,14 @@ struct SettingsView: View {
     guard
       let url = URL(
         string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  private func openMicrophonePrivacySettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     else { return }
     NSWorkspace.shared.open(url)
   }

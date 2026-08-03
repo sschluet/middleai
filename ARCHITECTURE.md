@@ -32,9 +32,12 @@ external display without a camera notch it becomes a compact floating capsule. R
 processing use the same focus-free status surface.
 
 The STT configuration retains the multilingual Parakeet TDT v3 model while allowing an int8 or
-int4 encoder, Neural Engine or GPU execution, German-script filtering or open multilingual
-decoding, and an additional long-form arbitration pass. Changing these settings invalidates the
-in-memory ASR manager and reloads the matching Core ML assets before the next recording.
+int4 encoder, automatic Core ML scheduling or CPU/GPU-only execution, German-script filtering or
+open multilingual decoding, and an additional long-form arbitration pass. A Core Audio device UID
+can pin recording to one input instead of following the system default. Changing model settings
+invalidates the in-memory ASR manager and reloads matching Core ML assets before the next recording.
+Non-content diagnostics record only duration, sample count, peak level and input-device name so a
+muted or misrouted microphone can be distinguished from an STT decoding failure.
 
 `MiddleAICore` is shared by the `MiddleAI` SwiftUI app, `middleai` CLI and test runner. Input adapters know only the engine. Open-WebUI routes, headers and response formats exist only in `OpenWebUIClient`.
 
@@ -42,7 +45,7 @@ in-memory ASR manager and reloads the matching Core ML assets before the next re
 
 SQLite stores `conversations`, `messages_cache`, `settings` and a prepared `embeddings` table. Open WebUI remains canonical. MiddleAI caches only the recent context required for routing and preserves the corresponding Open WebUI chat ID. The local routing copy has a configurable retention period and is purged independently of the canonical server chats.
 
-The heuristic router combines exponential recency, token-vector cosine similarity and follow-up markers. The embedding router provides a dependency-free local sparse-vector baseline. `LLMRouter` targets Ollama, llama.cpp, MLX or another OpenAI-compatible loopback API and validates the structured `RoutingDecision`. `HybridRouter` favors agreement and safely degrades to local deterministic routing.
+The heuristic router combines exponential recency, token-vector cosine similarity and follow-up markers. The embedding router provides a dependency-free local sparse-vector baseline. `LLMRouter` targets Ollama, llama.cpp, MLX or another loopback server exposing `/v1/models` and `/v1/chat/completions`, then validates the structured `RoutingDecision`. `HybridRouter` favors agreement and safely degrades to local deterministic routing.
 
 ## Open WebUI compatibility boundary
 

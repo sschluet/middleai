@@ -9,6 +9,7 @@ struct CapturedAudio: @unchecked Sendable {
   let sampleRate: Double
   let duration: TimeInterval
   let peakLevel: Float
+  let deviceName: String
 }
 
 enum VoiceCaptureError: LocalizedError {
@@ -16,6 +17,7 @@ enum VoiceCaptureError: LocalizedError {
   case microphonePermissionDenied
   case recordingTooShort
   case emptyTranscription
+  case noAudioSignal(String)
 
   var errorDescription: String? {
     switch self {
@@ -23,7 +25,10 @@ enum VoiceCaptureError: LocalizedError {
     case .microphonePermissionDenied:
       return "Der Mikrofonzugriff für MiddleAI ist nicht erlaubt."
     case .recordingTooShort: return "Die Aufnahme war zu kurz."
-    case .emptyTranscription: return "Es wurde keine Sprache erkannt."
+    case .emptyTranscription:
+      return
+        "Die Aufnahme enthielt Audio, aber keine verständliche Sprache. Bitte Mikrofon und Abstand prüfen."
+    case .noAudioSignal(let message): return message
     }
   }
 }
@@ -37,9 +42,19 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var startedAt: Date?
   private var tapInstalled = false
 
-  func start(onLevel: @escaping @Sendable (Float) -> Void) throws {
+  func start(deviceUID: String, onLevel: @escaping @Sendable (Float) -> Void) throws {
     if tapInstalled { _ = stop() }
+    engine.reset()
     let input = engine.inputNode
+    guard let device = AudioInputDeviceCatalog.selectedDevice(for: deviceUID) else {
+      throw AudioInputDeviceError.unavailable
+    }
+    guard let audioUnit = input.audioUnit else { throw VoiceCaptureError.microphoneUnavailable }
+    // AVAudioEngine already follows the current macOS input device. Only override
+    // the AudioUnit when the user deliberately pinned a concrete microphone.
+    if deviceUID != AudioInputDeviceCatalog.systemDefaultUID {
+      try AudioInputDeviceCatalog.apply(device, to: audioUnit)
+    }
     let hardwareFormat = input.outputFormat(forBus: 0)
     guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 else {
       throw VoiceCaptureError.microphoneUnavailable
@@ -55,6 +70,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       captureSampleRate = format.sampleRate
       peakLevel = 0
       startedAt = Date()
+      activeDeviceName = device.name
     }
 
     input.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
@@ -95,16 +111,20 @@ final class MicrophoneRecorder: @unchecked Sendable {
       let rate = captureSampleRate
       let duration = rate > 0 ? Double(samples.count) / rate : 0
       let result = CapturedAudio(
-        samples: samples, sampleRate: rate, duration: duration, peakLevel: peakLevel)
+        samples: samples, sampleRate: rate, duration: duration, peakLevel: peakLevel,
+        deviceName: activeDeviceName)
       chunks.removeAll(keepingCapacity: true)
       captureSampleRate = 0
       peakLevel = 0
       startedAt = nil
+      activeDeviceName = "Unbekanntes Mikrofon"
       return result
     }
   }
 
   func cancel() { _ = stop() }
+
+  private var activeDeviceName = "Unbekanntes Mikrofon"
 }
 
 actor ParakeetTranscriber {

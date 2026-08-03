@@ -73,8 +73,8 @@ Settings → Intelligence separates conversation routing from answer generation.
 The Hybrid strategy first compares recency, wording and local text similarity. If those signals disagree, one optional local intelligence source can break the tie:
 
 - **Apple Intelligence** uses the on-device macOS Foundation Model on supported macOS 26 systems. If it is unavailable, Hybrid safely falls back to its built-in rules.
-- **Ollama** uses the local OpenAI-compatible API, normally at `http://127.0.0.1:11434`, with an already downloaded model such as `qwen3:4b`.
-- **llama.cpp** uses an OpenAI-compatible `llama-server` or router. MiddleAI defaults this option to `http://127.0.0.1:18881` and calls `/v1/models` plus `/v1/chat/completions`.
+- **Ollama** uses its local `/v1` chat-completions API, normally at `http://127.0.0.1:11434`, with an already downloaded model such as `qwen3:4b`.
+- **llama.cpp** uses a local `llama-server` or router with the same `/v1` endpoints. MiddleAI defaults this option to `http://127.0.0.1:18881` and calls `/v1/models` plus `/v1/chat/completions`.
 - **MiddleAI rules only** disables the optional model and requires no separate AI runtime.
 
 For Ollama or llama.cpp, the configured model ID or alias must be known to the server. A successful connection test with an empty `/v1/models` response means the server is reachable, but no model is currently advertised. Only the current input and the titles and summaries of up to eight recent local conversations are sent to this loopback service.
@@ -121,7 +121,7 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 
 The Voice settings contain **Diktat vor dem Einfügen lokal glätten**. On macOS 26, this uses Apple's on-device Foundation Model with German locale support. MiddleAI accepts a generated correction only when numbers and protected terms remain present, the vocabulary stays close to the transcript and no substantial new wording is introduced. Otherwise it keeps a conservative local cleanup that only removes filler sounds and direct repetitions. Dictation text is never sent to OpenWebUI or another cloud service for polishing.
 
-Settings → Spracheingabe documents the active STT stack and exposes the useful Parakeet TDT v3 controls. German mode keeps the decoder in a compatible Latin script, while multilingual mode removes that restriction. The int8 encoder is the recommended accuracy setting; int4 uses less storage. Neural Engine mode favors energy efficiency and GPU mode favors throughput. For recordings longer than roughly 30 seconds, accurate long-form mode locally compares additional decoding paths at the cost of some processing time.
+Settings → Spracheingabe documents the active STT stack and exposes the useful Parakeet TDT v3 controls. The microphone picker can follow the macOS default or pin one connected Core Audio input device, which prevents a display, headset or conference speaker from silently taking over recording. German mode keeps the decoder in a compatible Latin script, while multilingual mode removes that restriction. The int8 encoder is the recommended accuracy setting; int4 uses less storage. Automatic acceleration lets Core ML select CPU, GPU and Neural Engine, while the compatibility option restricts execution to CPU and GPU. For recordings longer than roughly 30 seconds, accurate long-form mode locally compares additional decoding paths at the cost of some processing time. A recording that contains no measurable input now identifies the selected microphone instead of disappearing silently.
 
 ### Spoken formatting in selected apps
 
@@ -175,7 +175,7 @@ The server refuses configuration on `0.0.0.0`. New installations require a rando
 
 ## Conversation routing
 
-Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and optionally asks an OpenAI-compatible local routing model. If that model is unavailable, the heuristic path remains operational.
+Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and can optionally ask a local `/v1/chat/completions` routing model. If that model is unavailable, the heuristic path remains operational.
 
 The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
 

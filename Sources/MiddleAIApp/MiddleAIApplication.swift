@@ -44,6 +44,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var needsSetup = false
   @Published var voiceStatus = "Voice wird gestartet"
   @Published var sttStatus = "Parakeet TDT v3 wird lokal verwendet"
+  @Published var microphoneTestStatus = "Noch nicht getestet"
+  @Published var microphoneTestLevel: Double = 0
+  @Published var isTestingMicrophone = false
   @Published var ttsStatus = "Sprachausgabe wird gestartet"
   @Published var ttsModelStatuses: [TTSModelDownloadStatus] = TTSModelLibrary.scan(
     activeModelID: nil, confirmed: [], failures: [:])
@@ -64,6 +67,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private var voiceController: VoiceInputController?
   private var ttsPreviewTask: Task<Void, Never>?
   private var ttsDownloadMonitorTask: Task<Void, Never>?
+  private var microphoneTestTask: Task<Void, Never>?
+  private var microphoneTestRecorder: MicrophoneRecorder?
   private var confirmedTTSModels = Set<String>()
   private var ttsModelFailures: [String: String] = [:]
   private var reopenObserver: NSObjectProtocol?
@@ -417,6 +422,45 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     } catch {
       sttStatus = "STT-Einstellungen konnten nicht gespeichert werden"
       lastError = error.localizedDescription
+    }
+  }
+  func testSelectedMicrophone() {
+    guard !isTestingMicrophone else { return }
+    let recorder = MicrophoneRecorder()
+    microphoneTestRecorder = recorder
+    microphoneTestLevel = 0
+    isTestingMicrophone = true
+    microphoneTestStatus = "Bitte jetzt kurz sprechen …"
+    do {
+      try recorder.start(deviceUID: config.stt.inputDeviceUID) { [weak self] level in
+        Task { @MainActor in
+          self?.microphoneTestLevel = Double(level)
+        }
+      }
+    } catch {
+      microphoneTestRecorder = nil
+      isTestingMicrophone = false
+      microphoneTestStatus = error.localizedDescription
+      return
+    }
+    microphoneTestTask?.cancel()
+    microphoneTestTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(2.5))
+      guard !Task.isCancelled, let self, let recorder = self.microphoneTestRecorder else { return }
+      let audio = recorder.stop()
+      self.microphoneTestRecorder = nil
+      self.isTestingMicrophone = false
+      self.microphoneTestLevel = Double(audio.peakLevel)
+      if audio.samples.isEmpty {
+        self.microphoneTestStatus =
+          "Kein Audiostream von „\(audio.deviceName)“. Anderes Gerät testen; bei allen Geräten die Mikrofonfreigabe neu aktivieren."
+      } else if audio.peakLevel < 0.01 {
+        self.microphoneTestStatus =
+          "„\(audio.deviceName)“ liefert Audio, aber keinen hörbaren Pegel. Stummschaltung prüfen."
+      } else {
+        self.microphoneTestStatus =
+          "„\(audio.deviceName)“ funktioniert · \(Int(audio.duration * 1_000)) ms aufgenommen"
+      }
     }
   }
   func isDictationFormattingEnabled(for bundleIdentifier: String) -> Bool {
