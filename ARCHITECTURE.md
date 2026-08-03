@@ -7,7 +7,7 @@ Right Option / CLI / synchronous HTTP / Quick Input
   -> CommandDetector
   -> ConversationManager
   -> HybridRouter (Heuristic + local vector + optional local LLM)
-  -> OpenWebUIClient
+  -> selected AssistantClient (OpenWebUI / OpenAI / OpenRouter)
   -> SSE token stream
   -> spoken-response summarizer -> TTSQueue
   -> selected local engine (Qwen3-TTS / Supertonic / Voxtral / Apple voice)
@@ -18,7 +18,7 @@ The native Voice path starts before the engine:
 
 ```text
 left Option  -> AVAudioEngine -> configurable Parakeet TDT v3 -> conservative local cleanup -> restore target app -> focus-safe paste sequence
-right Option -> AVAudioEngine -> Parakeet TDT v3 -> MiddleAIEngine -> OpenWebUI -> local TTS
+right Option -> AVAudioEngine -> Parakeet TDT v3 -> MiddleAIEngine -> answer provider -> local TTS
 ```
 
 The global Option-key monitor supports both tap-to-toggle and push-to-talk. A short tap latches
@@ -34,16 +34,18 @@ processing use the same focus-free status surface.
 The STT configuration retains the multilingual Parakeet TDT v3 model while allowing an int8 or
 int4 encoder, automatic Core ML scheduling or CPU/GPU-only execution, German-script filtering or
 open multilingual decoding, and an additional long-form arbitration pass. A Core Audio device UID
-can pin recording to one input instead of following the system default. Changing model settings
+can pin recording to one input instead of following the system default. Output follows the same
+model: use the current macOS speaker or route MiddleAI playback to a fixed Core Audio UID without
+changing the global system output. Changing model settings
 invalidates the in-memory ASR manager and reloads matching Core ML assets before the next recording.
 Non-content diagnostics record only duration, sample count, peak level and input-device name so a
 muted or misrouted microphone can be distinguished from an STT decoding failure.
 
-`MiddleAICore` is shared by the `MiddleAI` SwiftUI app, `middleai` CLI and test runner. Input adapters know only the engine. Open-WebUI routes, headers and response formats exist only in `OpenWebUIClient`.
+`MiddleAICore` is shared by the `MiddleAI` SwiftUI app, `middleai` CLI and test runner. Input adapters know only the engine. Provider-specific routes, headers and response formats live in `OpenWebUIClient` and `HostedAIClient` behind `AssistantClientProtocol`.
 
 ## Conversation state
 
-SQLite stores `conversations`, `messages_cache`, `settings` and a prepared `embeddings` table. Open WebUI remains canonical. MiddleAI caches only the recent context required for routing and preserves the corresponding Open WebUI chat ID. The local routing copy has a configurable retention period and is purged independently of the canonical server chats.
+SQLite stores `conversations`, `messages_cache`, `settings` and a prepared `embeddings` table. OpenWebUI remains canonical when selected. OpenAI and OpenRouter do not persist MiddleAI chat IDs, so the required locally cached context is sent with each request. The local routing copy has a configurable retention period.
 
 The heuristic router combines exponential recency, token-vector cosine similarity and follow-up markers. The embedding router provides a dependency-free local sparse-vector baseline. `LLMRouter` targets Ollama, llama.cpp, MLX or another loopback server exposing `/v1/models` and `/v1/chat/completions`, then validates the structured `RoutingDecision`. `HybridRouter` favors agreement and safely degrades to local deterministic routing.
 
@@ -55,6 +57,6 @@ The chat flow follows the official Open WebUI backend-controlled API guidance: c
 
 ## Extensibility
 
-Protocols define `ConversationRoutingStrategy`, `ConversationStoreProtocol`, `AuthProvider`, `CredentialStore`, `OpenWebUIClientProtocol` and `TTSProvider`. Additional input adapters call `MiddleAIEngine.handle`; future providers do not need to change conversation logic. `LocalInputServer` serializes asynchronous command inputs before they reach the main-actor engine.
+Protocols define `ConversationRoutingStrategy`, `ConversationStoreProtocol`, `AuthProvider`, `CredentialStore`, `AssistantClientProtocol` and `TTSProvider`. Additional input adapters call `MiddleAIEngine.handle`; future providers do not need to change conversation logic. `LocalInputServer` serializes asynchronous command inputs before they reach the main-actor engine.
 
 The app UI is split into state/composition, reusable settings components, diagnostics, menu and quick-input views, activation-key monitoring and text insertion. Managed TTS models use explicit manifests and installation receipts instead of treating cache size alone as proof of readiness.

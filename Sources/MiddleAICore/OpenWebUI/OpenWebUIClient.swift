@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-public protocol OpenWebUIClientProtocol: Sendable {
+public protocol AssistantClientProtocol: Sendable {
   func authenticate() async throws
   func health() async throws
   func models() async throws -> [String]
@@ -15,11 +15,14 @@ public protocol OpenWebUIClientProtocol: Sendable {
   func chatURL(id: String) -> URL
 }
 
-extension OpenWebUIClientProtocol {
+extension AssistantClientProtocol {
   public func cancel(chatID: String) async {}
 }
 
-public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable {
+@available(*, deprecated, renamed: "AssistantClientProtocol")
+public typealias OpenWebUIClientProtocol = AssistantClientProtocol
+
+public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable {
   private struct ModelOptions: Sendable {
     var features: [String: Bool] = [:]
     var toolIDs: [String] = []

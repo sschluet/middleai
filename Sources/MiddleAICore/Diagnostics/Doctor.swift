@@ -15,7 +15,7 @@ public struct DiagnosticCheck: Sendable {
 public struct Doctor: Sendable {
   public init() {}
   public func run(
-    config: AppConfig, credentials: any CredentialStore, client: any OpenWebUIClientProtocol
+    config: AppConfig, credentials: any CredentialStore, client: any AssistantClientProtocol
   ) async -> [DiagnosticCheck] {
     var checks: [DiagnosticCheck] = []
     checks.append(
@@ -53,33 +53,47 @@ public struct Doctor: Sendable {
           "Freier Speicher", gigabytes >= 5,
           String(format: "%.1f GB verfügbar", gigabytes)))
     }
-    let endpoint = URL(string: config.openwebui.url)
-    let secureEndpoint =
-      endpoint?.scheme?.lowercased() == "https" || endpoint?.host?.isLoopback == true
-    checks.append(
-      DiagnosticCheck(
-        "Sicherer OpenWebUI-Endpunkt", secureEndpoint,
-        secureEndpoint ? "TLS oder lokaler Loopback" : "Für entfernte Server HTTPS verwenden"))
-    let scopedCredentials = ScopedCredentialStore(
-      base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
-    checks.append(
-      DiagnosticCheck(
-        "Keychain / credential",
+    if config.assistant.provider == "openwebui" {
+      let endpoint = URL(string: config.openwebui.url)
+      let secureEndpoint =
+        endpoint?.scheme?.lowercased() == "https" || endpoint?.host?.isLoopback == true
+      checks.append(
+        DiagnosticCheck(
+          "Sicherer OpenWebUI-Endpunkt", secureEndpoint,
+          secureEndpoint ? "TLS oder lokaler Loopback" : "Für entfernte Server HTTPS verwenden"))
+    }
+    let credentialAvailable: Bool
+    if config.assistant.provider == "openai" {
+      credentialAvailable =
+        (try? credentials.read(account: HostedAIProvider.openai.credentialAccount)) != nil
+    } else if config.assistant.provider == "openrouter" {
+      credentialAvailable =
+        (try? credentials.read(account: HostedAIProvider.openrouter.credentialAccount)) != nil
+    } else {
+      let scopedCredentials = ScopedCredentialStore(
+        base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
+      credentialAvailable =
         (try? scopedCredentials.read(
-          account: config.openwebui.authMethod == "api_key" ? "api_token" : "password")) != nil))
+          account: config.openwebui.authMethod == "api_key" ? "api_token" : "password")) != nil
+    }
+    checks.append(
+      DiagnosticCheck(
+        "Schlüsselbund / Zugangsdaten", credentialAvailable))
     do {
       try await client.health()
-      checks.append(DiagnosticCheck("Open WebUI reachable", true))
+      checks.append(DiagnosticCheck("\(config.assistantProviderTitle) erreichbar", true))
     } catch {
-      checks.append(DiagnosticCheck("Open WebUI reachable", false, error.localizedDescription))
+      checks.append(
+        DiagnosticCheck(
+          "\(config.assistantProviderTitle) erreichbar", false, error.localizedDescription))
       return checks
     }
     do {
       try await client.authenticate()
       checks.append(DiagnosticCheck("Authentication", true))
       let models = try await client.models()
-      checks.append(DiagnosticCheck("Open WebUI API", true, "\(models.count) Modelle verfügbar"))
-      let configuredModel = config.openwebui.model.trimmingCharacters(in: .whitespacesAndNewlines)
+      checks.append(DiagnosticCheck("Anbieter-API", true, "\(models.count) Modelle verfügbar"))
+      let configuredModel = config.assistantModel.trimmingCharacters(in: .whitespacesAndNewlines)
       checks.append(
         DiagnosticCheck(
           "Konfigurierte Modell-ID", !configuredModel.isEmpty && models.contains(configuredModel),

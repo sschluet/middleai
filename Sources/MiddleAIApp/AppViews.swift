@@ -33,7 +33,7 @@ struct MenuContent: View {
     Button("Hilfe & Systemanforderungen…") { state.showHelpWindow() }
     Button("New Conversation") { state.newConversation() }
     Button("Stop Speaking") { state.stopSpeaking() }
-    Button("Open Current Chat in Open WebUI") { state.openCurrentChat() }.disabled(
+    Button("Anbieter-Seite öffnen") { state.openCurrentChat() }.disabled(
       state.engine?.manager.currentConversation?.openWebUIChatID == nil)
     Divider()
     SettingsLink { Text("Settings") }
@@ -147,7 +147,7 @@ struct QuickInputView: View {
             Button {
               state.openCurrentChat()
             } label: {
-              Label("Open WebUI", systemImage: "arrow.up.right.square")
+              Label(state.config.assistantProviderTitle, systemImage: "arrow.up.right.square")
             }
             .buttonStyle(.bordered)
           }
@@ -196,7 +196,7 @@ struct QuickInputView: View {
           if state.isWorking {
             VStack(spacing: 12) {
               ProgressView().controlSize(.small)
-              Text("OpenWebUI erstellt die Antwort")
+              Text("\(state.config.assistantProviderTitle) erstellt die Antwort")
                 .font(.callout.weight(.medium))
               Text("Ein Druck auf die rechte Optionstaste bricht ab.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -302,19 +302,44 @@ struct LegacySettingsView: View {
         if state.needsSetup {
           Text("Welcome to MiddleAI").font(.title2)
           Text(
-            "Enter your private Open WebUI connection. The password is stored only in macOS Keychain."
+            "Wähle deinen Antwortanbieter. Zugangsdaten bleiben ausschließlich im macOS-Schlüsselbund."
           )
         }
-        TextField("Open WebUI URL", text: $state.config.openwebui.url)
-        TextField("Username / email", text: $state.config.openwebui.username)
-        SecureField("Password", text: $password)
-        TextField("Model ID", text: $state.config.openwebui.model)
-        Toggle("Verify TLS certificates", isOn: $state.config.openwebui.tlsVerify)
+        Picker("Anbieter", selection: $state.config.assistant.provider) {
+          Text("OpenWebUI").tag("openwebui")
+          Text("OpenAI Platform").tag("openai")
+          Text("OpenRouter").tag("openrouter")
+        }
+        if state.config.assistant.provider == "openwebui" {
+          TextField("OpenWebUI URL", text: $state.config.openwebui.url)
+          TextField("Username / email", text: $state.config.openwebui.username)
+        }
+        SecureField(
+          state.config.assistant.provider == "openwebui" ? "Password" : "API key", text: $password)
         TextField(
-          "Custom CA file (optional)",
+          "Model ID",
           text: Binding(
-            get: { state.config.openwebui.caFile ?? "" },
-            set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
+            get: { state.config.assistantModel }, set: { state.config.assistantModel = $0 }))
+        Button("Authentifizieren und Modelle laden") {
+          Task { await state.loadProviderModels(secret: password) }
+        }
+        if !state.providerModels.isEmpty {
+          Picker(
+            "Verfügbares Modell",
+            selection: Binding(
+              get: { state.config.assistantModel }, set: { state.config.assistantModel = $0 })
+          ) {
+            ForEach(state.providerModels, id: \.self) { Text($0).tag($0) }
+          }
+        }
+        if state.config.assistant.provider == "openwebui" {
+          Toggle("Verify TLS certificates", isOn: $state.config.openwebui.tlsVerify)
+          TextField(
+            "Custom CA file (optional)",
+            text: Binding(
+              get: { state.config.openwebui.caFile ?? "" },
+              set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
+        }
         HStack {
           Button("Save & Test Connection") { save() }
           Text(message).foregroundStyle(message.hasPrefix("Saved") ? .green : .red)
@@ -431,7 +456,7 @@ struct LegacySettingsView: View {
       Form {
         Text("MiddleAI Voice").font(.headline)
         LabeledContent("Linke Optionstaste", value: "Diktat ins aktive Textfeld")
-        LabeledContent("Rechte Optionstaste", value: "Anfrage an OpenWebUI")
+        LabeledContent("Rechte Optionstaste", value: "Anfrage an den KI-Anbieter")
         Text(
           "Kurz drücken startet oder beendet die Aufnahme. Gedrückthalten und Loslassen funktioniert ebenfalls."
         )

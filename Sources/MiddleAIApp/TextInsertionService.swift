@@ -157,7 +157,8 @@ enum VoiceInputError: LocalizedError {
     case .couldNotInsertText: return "Der erkannte Text konnte nicht eingefügt werden."
     case .targetApplicationUnavailable:
       return "Die Zielanwendung ist nicht mehr aktiv. Bitte das Textfeld erneut auswählen."
-    case .assistantNotConfigured: return "OpenWebUI ist in MiddleAI noch nicht eingerichtet."
+    case .assistantNotConfigured:
+      return "Der Antwortanbieter ist in MiddleAI noch nicht eingerichtet."
     case .recordingCancelled: return "Diktat abgebrochen."
     }
   }

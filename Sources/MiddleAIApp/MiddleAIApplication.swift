@@ -22,6 +22,27 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 }
 
+private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
+  private let base: any CredentialStore
+  private let lock = NSLock()
+  private var overrides: [String: String]
+
+  init(base: any CredentialStore, account: String, value: String) {
+    self.base = base
+    self.overrides = [account: value]
+  }
+  func save(_ value: String, account: String) throws {
+    lock.withLock { overrides[account] = value }
+  }
+  func read(account: String) throws -> String? {
+    if let value = lock.withLock({ overrides[account] }) { return value }
+    return try base.read(account: account)
+  }
+  func delete(account: String) throws {
+    lock.withLock { _ = overrides.removeValue(forKey: account) }
+  }
+}
+
 @main struct MiddleAIApplication: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var state = AppState()
@@ -37,6 +58,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor final class AppState: ObservableObject {
   @Published var config = AppConfig()
   @Published var status = "Starting"
+  @Published var providerModels: [String] = []
+  @Published var providerModelStatus = "Noch keine Modellliste geladen"
   @Published var lastError = ""
   @Published var input = ""
   @Published var responseText = ""
@@ -72,6 +95,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private var confirmedTTSModels = Set<String>()
   private var ttsModelFailures: [String: String] = [:]
   private var reopenObserver: NSObjectProtocol?
+  private var builtAssistantProvider = ""
   init() {
     reopenObserver = NotificationCenter.default.addObserver(
       forName: .middleAIReopen, object: nil, queue: .main
@@ -96,9 +120,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         try? ConfigLoader.save(config)
       }
       let usernameMissing =
-        config.openwebui.authMethod == "password"
+        config.assistant.provider == "openwebui"
+        && config.openwebui.authMethod == "password"
         && config.openwebui.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      let modelMissing = config.openwebui.model.trimmingCharacters(in: .whitespacesAndNewlines)
+      let modelMissing = config.assistantModel.trimmingCharacters(in: .whitespacesAndNewlines)
         .isEmpty
       needsSetup = needsSetup || usernameMissing || modelMissing
       try rebuild()
@@ -147,9 +172,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     engine?.manager.currentConversation?.title ?? "No active conversation"
   }
   func rebuild() throws {
+    let providerChanged =
+      !builtAssistantProvider.isEmpty
+      && builtAssistantProvider != config.assistant.provider
     server?.stop()
     engine?.ttsQueue.stop()
     engine = try MiddleAIFactory.make(config: config, credentials: credentials)
+    builtAssistantProvider = config.assistant.provider
+    if providerChanged {
+      _ = try engine?.manager.create(
+        title: "Neue Unterhaltung", profile: config.activeProfile)
+      responseText = ""
+      refreshConversations()
+    }
   }
   func connectAndServe() async {
     guard let engine else { return }
@@ -165,11 +200,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       try server?.start()
       try await engine.client.authenticate()
       let availableModels = try await engine.client.models()
-      let selectedModel = config.openwebui.model.trimmingCharacters(in: .whitespacesAndNewlines)
+      let selectedModel = config.assistantModel.trimmingCharacters(in: .whitespacesAndNewlines)
       guard availableModels.contains(selectedModel) else {
         throw MiddleAIError.configuration(
-          "Die Modell-ID „\(selectedModel)“ ist auf \(config.openwebui.url) nicht verfügbar.")
+          "Die Modell-ID „\(selectedModel)“ ist bei \(config.assistantProviderTitle) nicht verfügbar."
+        )
       }
+      providerModels = availableModels
+      providerModelStatus =
+        "\(availableModels.count) Modelle von \(config.assistantProviderTitle) geladen"
       status = "Connected"
       lastError = ""
     } catch {
@@ -316,7 +355,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
       Architektur: \(ProcessInfo.processInfo.machineHardwareName)
       TTS-Provider: \(config.tts.provider)
-      OpenWebUI-Authentifizierung: \(config.openwebui.authMethod)
+      Antwortanbieter: \(config.assistantProviderTitle)
 
       Prüfungen:
       \(checkLines.isEmpty ? "- Noch nicht ausgeführt" : checkLines)
@@ -364,11 +403,71 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     NSWorkspace.shared.open(engine.client.chatURL(id: id))
   }
   func save(password: String) throws {
+    try saveProviderCredential(password)
     try ConfigLoader.save(config)
-    if !password.isEmpty { try credentials.save(password, account: "password") }
     needsSetup = false
     try rebuild()
     prepareTTSModel()
+  }
+
+  func loadProviderModels(secret: String) async {
+    providerModelStatus = "Authentifizierung wird geprüft …"
+    do {
+      let trialCredentials: any CredentialStore
+      if secret.isEmpty {
+        trialCredentials = credentials
+      } else {
+        trialCredentials = TrialCredentialStore(
+          base: credentials, account: credentialAccountForSelectedProvider, value: secret)
+      }
+      let trialClient = try MiddleAIFactory.makeAssistantClient(
+        config: config, credentials: trialCredentials)
+      try await trialClient.authenticate()
+      let models = try await trialClient.models()
+      providerModels = models
+      providerModelStatus = "\(models.count) Modelle von \(config.assistantProviderTitle) geladen"
+      if config.assistantModel.isEmpty,
+        let suggested = Self.suggestedModel(
+          for: config.assistant.provider, models: models)
+      {
+        config.assistantModel = suggested
+      }
+      try saveProviderCredential(secret)
+      try ConfigLoader.save(config)
+      try rebuild()
+      lastError = ""
+    } catch {
+      providerModels = []
+      providerModelStatus = "Modellliste konnte nicht geladen werden"
+      lastError = error.localizedDescription
+    }
+  }
+
+  private func saveProviderCredential(_ secret: String) throws {
+    guard !secret.isEmpty else { return }
+    switch config.assistant.provider {
+    case "openai":
+      try credentials.save(secret, account: HostedAIProvider.openai.credentialAccount)
+    case "openrouter":
+      try credentials.save(secret, account: HostedAIProvider.openrouter.credentialAccount)
+    default:
+      try credentials.save(secret, account: "password")
+    }
+  }
+
+  private var credentialAccountForSelectedProvider: String {
+    switch config.assistant.provider {
+    case "openai": return HostedAIProvider.openai.credentialAccount
+    case "openrouter": return HostedAIProvider.openrouter.credentialAccount
+    default: return "password"
+    }
+  }
+
+  private static func suggestedModel(for provider: String, models: [String]) -> String? {
+    let preferences =
+      provider == "openai"
+      ? ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.4"] : []
+    return preferences.first(where: models.contains) ?? models.first
   }
   var dictationPolishingStatus: String {
     DictationPolisher.availabilityDescription
@@ -422,6 +521,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     } catch {
       sttStatus = "STT-Einstellungen konnten nicht gespeichert werden"
       lastError = error.localizedDescription
+    }
+  }
+  func applyAudioDeviceSettings() {
+    do {
+      try ConfigLoader.save(config)
+      try rebuild()
+      voiceController?.reloadSTTSettings()
+      voiceStatus = "Audio-Geräte gespeichert"
+      Task { await connectAndServe() }
+    } catch {
+      lastError = error.localizedDescription
+      voiceStatus = "Audio-Geräte konnten nicht gespeichert werden"
     }
   }
   func testSelectedMicrophone() {

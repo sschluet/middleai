@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   case connection
+  case devices
   case speech
   case voice
   case intelligence
@@ -15,6 +16,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var title: String {
     switch self {
     case .connection: return "Verbindung"
+    case .devices: return "Geräte"
     case .speech: return "Sprachausgabe"
     case .voice: return "Spracheingabe"
     case .intelligence: return "Intelligenz"
@@ -24,7 +26,8 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   }
   var subtitle: String {
     switch self {
-    case .connection: return "OpenWebUI und Modell"
+    case .connection: return "KI-Anbieter und Modell"
+    case .devices: return "Mikrofon und Lautsprecher"
     case .speech: return "Stimmen und Kurzfassungen"
     case .voice: return "Aktivierungstasten und Diktat"
     case .intelligence: return "Routing und lokale Modelle"
@@ -35,6 +38,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var symbol: String {
     switch self {
     case .connection: return "network"
+    case .devices: return "hifispeaker.2"
     case .speech: return "speaker.wave.3"
     case .voice: return "waveform.and.mic"
     case .intelligence: return "brain.head.profile"
@@ -53,6 +57,7 @@ struct SettingsView: View {
   @State private var showsVoxtralLicenseConfirmation = false
   @State private var confirmsCacheDeletion = false
   @State private var audioInputDevices = AudioInputDeviceCatalog.availableDevices()
+  @State private var audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
@@ -109,6 +114,7 @@ struct SettingsView: View {
           paneHeader
           switch selected ?? .connection {
           case .connection: connectionPane
+          case .devices: devicesPane
           case .speech: speechPane
           case .voice: voicePane
           case .intelligence: intelligencePane
@@ -149,37 +155,98 @@ struct SettingsView: View {
         Text(pane.subtitle).font(.callout).foregroundStyle(.secondary)
       }
       Spacer()
-      Text(state.status == "Connected" ? "OpenWebUI verbunden" : "Lokal konfiguriert")
-        .font(.caption.weight(.medium))
-        .foregroundStyle(state.status == "Connected" ? Color.green : .secondary)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(Color.primary.opacity(0.045), in: Capsule())
+      Text(
+        state.status == "Connected"
+          ? "\(state.config.assistantProviderTitle) verbunden" : "Lokal konfiguriert"
+      )
+      .font(.caption.weight(.medium))
+      .foregroundStyle(state.status == "Connected" ? Color.green : .secondary)
+      .padding(.horizontal, 10).padding(.vertical, 6)
+      .background(Color.primary.opacity(0.045), in: Capsule())
     }
   }
 
   private var connectionPane: some View {
     VStack(spacing: 16) {
       SettingsCard(
-        title: "OpenWebUI", subtitle: "Private Verbindung zu deinem OpenWebUI-Arbeitsbereich",
-        symbol: "lock.shield"
+        title: "Antwortanbieter", subtitle: "Wohin MiddleAI deine gesprochenen Anfragen sendet",
+        symbol: "point.3.connected.trianglepath.dotted"
       ) {
-        SettingsField(
-          title: "Server", prompt: "https://chat.example.com", text: $state.config.openwebui.url)
-        SettingsField(
-          title: "Benutzer", prompt: "name@firma.de", text: $state.config.openwebui.username)
+        Picker("Anbieter", selection: $state.config.assistant.provider) {
+          Text("OpenWebUI · eigener Arbeitsbereich").tag("openwebui")
+          Text("OpenAI Platform · API-Schlüssel").tag("openai")
+          Text("OpenRouter · API-Schlüssel").tag("openrouter")
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: state.config.assistant.provider) { _, _ in
+          password = ""
+          state.providerModels = []
+          state.providerModelStatus = "Bitte für diesen Anbieter authentifizieren"
+          saveMessage = ""
+        }
+        Text(answerProviderDescription).font(.caption).foregroundStyle(.secondary)
+        Label(
+          "Beim Anbieterwechsel startet MiddleAI eine neue Unterhaltung, damit alter Gesprächskontext nicht unbeabsichtigt an einen anderen Dienst übertragen wird.",
+          systemImage: "lock.shield"
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: state.config.assistantProviderTitle,
+        subtitle: state.config.assistant.provider == "openwebui"
+          ? "Server und Anmeldung" : "API-Zugriff und Modell",
+        symbol: state.config.assistant.provider == "openwebui" ? "server.rack" : "key"
+      ) {
+        if state.config.assistant.provider == "openwebui" {
+          SettingsField(
+            title: "Server", prompt: "https://chat.example.com", text: $state.config.openwebui.url)
+          SettingsField(
+            title: "Benutzer", prompt: "name@firma.de", text: $state.config.openwebui.username)
+        }
         HStack(alignment: .firstTextBaseline, spacing: 18) {
-          Text("Passwort").frame(width: 112, alignment: .leading).foregroundStyle(.secondary)
-          SecureField("Im macOS-Schlüsselbund gespeichert", text: $password)
+          Text(state.config.assistant.provider == "openwebui" ? "Passwort" : "API-Schlüssel")
+            .frame(width: 112, alignment: .leading).foregroundStyle(.secondary)
+          SecureField("Unverändert lassen oder neu eingeben", text: $password)
             .textFieldStyle(.roundedBorder)
         }
-        SettingsField(title: "Modell-ID", prompt: "model-id", text: $state.config.openwebui.model)
-        Divider()
-        Toggle("TLS-Zertifikate überprüfen", isOn: $state.config.openwebui.tlsVerify)
+        Text(
+          "Das Geheimnis wird ausschließlich im macOS-Schlüsselbund gespeichert und nie in die Konfigurationsdatei geschrieben."
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+        HStack {
+          Button {
+            Task { await state.loadProviderModels(secret: password) }
+          } label: {
+            Label("Authentifizieren und Modelle laden", systemImage: "arrow.down.circle")
+          }
+          .buttonStyle(.bordered)
+          Text(state.providerModelStatus).font(.caption).foregroundStyle(.secondary)
+        }
+        if !state.providerModels.isEmpty {
+          Picker("Verfügbares Modell", selection: assistantModelBinding) {
+            ForEach(state.providerModels, id: \.self) { Text($0).tag($0) }
+          }
+          .pickerStyle(.menu)
+        }
         SettingsField(
-          title: "Eigene CA", prompt: "Optionaler Dateipfad",
-          text: Binding(
-            get: { state.config.openwebui.caFile ?? "" },
-            set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
+          title: "Modell-ID", prompt: "Modell auswählen oder ID eintragen",
+          text: assistantModelBinding)
+        if state.config.assistant.provider == "openwebui" {
+          Divider()
+          Toggle("TLS-Zertifikate überprüfen", isOn: $state.config.openwebui.tlsVerify)
+          SettingsField(
+            title: "Eigene CA", prompt: "Optionaler Dateipfad",
+            text: Binding(
+              get: { state.config.openwebui.caFile ?? "" },
+              set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
+        } else {
+          Label(
+            "Anfragen und Gesprächskontext werden an \(state.config.assistantProviderTitle) übertragen. STT, Diktat und TTS bleiben lokal.",
+            systemImage: "info.circle"
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
       }
 
       HStack(spacing: 12) {
@@ -196,6 +263,87 @@ struct SettingsView: View {
             .foregroundStyle(saveMessage.contains("verbunden") ? .green : .red)
         }
         Spacer()
+      }
+    }
+  }
+
+  private var devicesPane: some View {
+    VStack(spacing: 16) {
+      SettingsCard(
+        title: "Audioeingang", subtitle: "Mikrofon für Diktat und MiddleAI-Anfragen",
+        symbol: "mic"
+      ) {
+        Picker("Mikrofon", selection: $state.config.stt.inputDeviceUID) {
+          Text(systemDefaultMicrophoneLabel).tag(AudioInputDeviceCatalog.systemDefaultUID)
+          ForEach(audioInputDevices) { Text($0.name).tag($0.uid) }
+          if state.config.stt.inputDeviceUID != AudioInputDeviceCatalog.systemDefaultUID,
+            !audioInputDevices.contains(where: { $0.uid == state.config.stt.inputDeviceUID })
+          {
+            Text("Nicht verfügbares Mikrofon").tag(state.config.stt.inputDeviceUID)
+          }
+        }
+        .pickerStyle(.menu)
+        Text(
+          "„macOS-Standard“ folgt automatisch jedem Wechsel unter Systemeinstellungen > Ton > Eingabe. Eine feste Auswahl bleibt an dieses Gerät gebunden."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Label(selectedMicrophoneStatus, systemImage: "mic.fill")
+          .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+          Button(state.isTestingMicrophone ? "Test läuft …" : "Mikrofon 2,5 Sekunden testen") {
+            state.testSelectedMicrophone()
+          }.disabled(state.isTestingMicrophone)
+          ProgressView(value: state.microphoneTestLevel, total: 1).frame(maxWidth: 160)
+          Text(state.microphoneTestStatus).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+
+      SettingsCard(
+        title: "Audioausgabe", subtitle: "Lautsprecher für vorgelesene Antworten",
+        symbol: "hifispeaker"
+      ) {
+        Picker("Lautsprecher", selection: $state.config.tts.outputDeviceUID) {
+          Text(systemDefaultSpeakerLabel).tag(AudioOutputDeviceCatalog.systemDefaultUID)
+          ForEach(audioOutputDevices) { Text($0.name).tag($0.uid) }
+          if state.config.tts.outputDeviceUID != AudioOutputDeviceCatalog.systemDefaultUID,
+            !audioOutputDevices.contains(where: { $0.uid == state.config.tts.outputDeviceUID })
+          {
+            Text("Nicht verfügbarer Lautsprecher").tag(state.config.tts.outputDeviceUID)
+          }
+        }
+        .pickerStyle(.menu)
+        Text(
+          "„macOS-Standard“ folgt automatisch AirPods, Dock, Monitor oder internen Lautsprechern. Eine feste Auswahl wird für MiddleAI bevorzugt; fällt sie weg, nutzt MiddleAI sicher den macOS-Standard."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Label(selectedSpeakerStatus, systemImage: "speaker.wave.2.fill")
+          .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+      }
+
+      HStack {
+        Button {
+          refreshAudioDevices()
+        } label: {
+          Label("Geräte neu laden", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
+        Button("Auswahl speichern") { state.applyAudioDeviceSettings() }
+          .buttonStyle(.borderedProminent)
+        Button("Ausgabe testen") {
+          state.applyAudioDeviceSettings()
+          state.testTTS()
+        }.buttonStyle(.bordered)
+        Spacer()
+      }
+      SettingsCard(
+        title: "Berechtigungen", subtitle: "macOS-Zugriff für Audio und Texteingabe",
+        symbol: "hand.raised"
+      ) {
+        Label(state.voiceStatus, systemImage: "waveform")
+        HStack {
+          Button("Mikrofonfreigabe öffnen") { openMicrophonePrivacySettings() }
+          Button("Bedienungshilfen öffnen") { openPrivacySettings() }
+        }.buttonStyle(.bordered)
       }
     }
   }
@@ -385,58 +533,6 @@ struct SettingsView: View {
           }
         }
         Divider()
-        VStack(alignment: .leading, spacing: 7) {
-          HStack {
-            Picker("Mikrofon", selection: $state.config.stt.inputDeviceUID) {
-              Text(systemDefaultMicrophoneLabel).tag(AudioInputDeviceCatalog.systemDefaultUID)
-              ForEach(audioInputDevices) { device in
-                Text(device.name).tag(device.uid)
-              }
-              if state.config.stt.inputDeviceUID != AudioInputDeviceCatalog.systemDefaultUID,
-                !audioInputDevices.contains(where: { $0.uid == state.config.stt.inputDeviceUID })
-              {
-                Text("Nicht verfügbares Mikrofon").tag(state.config.stt.inputDeviceUID)
-              }
-            }
-            .pickerStyle(.menu)
-            Button {
-              audioInputDevices = AudioInputDeviceCatalog.availableDevices()
-            } label: {
-              Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help("Liste der angeschlossenen Mikrofone neu laden")
-          }
-          Text(
-            "Bestimmt, von welchem Gerät MiddleAI Audio aufnimmt. „macOS-Standard“ folgt der Auswahl unter Systemeinstellungen > Ton > Eingabe. Wähle ein Gerät fest aus, wenn ein Monitor, Headset oder Konferenzlautsprecher versehentlich als Standard aktiv wird."
-          )
-          .font(.caption).foregroundStyle(.secondary)
-          Label(selectedMicrophoneStatus, systemImage: "mic.fill")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-          HStack(spacing: 10) {
-            Button(state.isTestingMicrophone ? "Test läuft …" : "Mikrofon 2,5 Sekunden testen") {
-              state.testSelectedMicrophone()
-            }
-            .buttonStyle(.bordered)
-            .disabled(state.isTestingMicrophone)
-            ProgressView(value: state.microphoneTestLevel, total: 1)
-              .frame(maxWidth: 150)
-            Text(state.microphoneTestStatus)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .lineLimit(2)
-          }
-          HStack(spacing: 8) {
-            Button("Mikrofonfreigabe öffnen") { openMicrophonePrivacySettings() }
-              .buttonStyle(.borderless)
-            Text(
-              "Falls kein Audiostream ankommt: zuerst ein anderes Mikrofon testen. Bleibt der Fehler bei allen Geräten bestehen, MiddleAI unter Datenschutz & Sicherheit > Mikrofon einmal aus- und wieder einschalten."
-            )
-            .font(.caption).foregroundStyle(.secondary)
-          }
-        }
-        Divider()
         Picker("Sprachmodus", selection: $state.config.stt.language) {
           Text("Deutsch · empfohlen").tag("de")
           Text("Mehrsprachig · automatisch").tag("auto")
@@ -498,7 +594,7 @@ struct SettingsView: View {
         ) { state.setActivationKey($0, for: .dictation) }
         Divider()
         ActivationKeyPickerRow(
-          title: "MiddleAI", detail: "Gesprochene Anfrage an OpenWebUI senden",
+          title: "MiddleAI", detail: "Gesprochene Anfrage an den gewählten KI-Anbieter senden",
           selection: ActivationKeyChoice(rawValue: state.config.hotkeys.assistant) ?? .rightOption
         ) { state.setActivationKey($0, for: .assistant) }
         Divider()
@@ -574,14 +670,6 @@ struct SettingsView: View {
         .font(.caption).foregroundStyle(.secondary)
       }
 
-      SettingsCard(
-        title: "Berechtigungen", subtitle: "Für globale Tasten und Texteingabe",
-        symbol: "hand.raised"
-      ) {
-        Label(state.voiceStatus, systemImage: "waveform")
-        Button("Datenschutz und Bedienungshilfen öffnen") { openPrivacySettings() }
-          .buttonStyle(.bordered)
-      }
     }
   }
 
@@ -602,9 +690,9 @@ struct SettingsView: View {
               "Eine Folgefrage bleibt im aktuellen Thema. Ein neues Thema bekommt einen neuen Chat."
           )
           IntelligenceStep(
-            number: "3", title: "OpenWebUI erstellt die Antwort",
+            number: "3", title: "Der gewählte Anbieter erstellt die Antwort",
             detail:
-              "Das hier eingestellte Routing-Modell beantwortet niemals deine Frage und ersetzt OpenWebUI nicht."
+              "Das hier eingestellte Routing-Modell beantwortet niemals deine Frage und ersetzt den Antwortanbieter nicht."
           )
         }
         Divider()
@@ -685,7 +773,7 @@ struct SettingsView: View {
         }
         Divider()
         Label(
-          "Diese Auswahl betrifft nur mehrdeutige Chat-Zuordnungen. Antworten erzeugt weiterhin OpenWebUI. Diktatglättung stellst du unter „Spracheingabe“ ein; Kurzfassungen unter „Sprachausgabe“.",
+          "Diese Auswahl betrifft nur mehrdeutige Chat-Zuordnungen. Antworten erzeugt weiterhin \(state.config.assistantProviderTitle). Diktatglättung stellst du unter „Spracheingabe“ ein; Kurzfassungen unter „Sprachausgabe“.",
           systemImage: "lock.shield"
         )
         .font(.caption).foregroundStyle(.secondary)
@@ -711,6 +799,53 @@ struct SettingsView: View {
   private var helpPane: some View {
     VStack(spacing: 16) {
       SettingsCard(
+        title: "Antwortanbieter einrichten",
+        subtitle: "OpenWebUI, OpenAI Platform oder OpenRouter",
+        symbol: "point.3.connected.trianglepath.dotted"
+      ) {
+        HelpStep(
+          number: "1", title: "Anbieter wählen",
+          detail:
+            "OpenWebUI nutzt deinen eigenen Server. OpenAI und OpenRouter benötigen jeweils einen API-Schlüssel des Anbieters."
+        )
+        HelpStep(
+          number: "2", title: "Modelle laden",
+          detail:
+            "Unter Verbindung authentifizieren. MiddleAI liest anschließend die für den Schlüssel sichtbaren Modell-IDs direkt vom Anbieter aus."
+        )
+        HelpStep(
+          number: "3", title: "Modell speichern",
+          detail:
+            "Wähle ein Modell aus der Liste oder trage eine unterstützte ID manuell ein. Zugangsdaten bleiben ausschließlich im macOS-Schlüsselbund."
+        )
+        Label(
+          "Ein ChatGPT-Abonnement ist getrennt von der nutzungsbasierten OpenAI Platform API. Bei OpenRouter gelten die Preise und Datenschutzregeln der dort gewählten Modellroute.",
+          systemImage: "info.circle"
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: "Audiogeräte",
+        subtitle: "Automatisch dem Mac folgen oder Geräte fest auswählen",
+        symbol: "hifispeaker.2"
+      ) {
+        HelpStep(
+          number: "1", title: "macOS-Standard",
+          detail: "Folgt automatisch einem Wechsel auf AirPods, Dock, Monitor oder interne Geräte.")
+        HelpStep(
+          number: "2", title: "Festes Gerät",
+          detail:
+            "MiddleAI verwendet die Core-Audio-UID des gewählten Mikrofons oder Lautsprechers, ohne den globalen macOS-Ausgang umzuschalten."
+        )
+        HelpStep(
+          number: "3", title: "Sicherer Rückfall",
+          detail:
+            "Ist ein fest gewählter Lautsprecher nicht mehr erreichbar, wird die Ausgabe über den aktuellen macOS-Standard versucht."
+        )
+      }
+
+      SettingsCard(
         title: "Systemanforderungen", subtitle: "Unterstützte Macs und empfohlene Ausstattung",
         symbol: "desktopcomputer"
       ) {
@@ -728,7 +863,7 @@ struct SettingsView: View {
         Divider()
         RequirementRow(
           symbol: "network", title: "Netzwerk",
-          value: "Erster Modelldownload und OpenWebUI-Verbindung")
+          value: "Erster Modelldownload und Verbindung zum Antwortanbieter")
         Text(
           "Intel-Macs werden vom aktuellen App-Paket nicht unterstützt. Diktatglättung und intelligente Kurzfassungen über Apple Intelligence benötigen macOS 26 und ein dafür freigegebenes Gerät; MiddleAI verwendet andernfalls lokale Rückfallverfahren."
         )
@@ -752,7 +887,7 @@ struct SettingsView: View {
         HelpStep(
           number: "3", title: "Verbindung und Berechtigungen einrichten",
           detail:
-            "OpenWebUI-Zugangsdaten, Mikrofon und Bedienungshilfen werden aus Sicherheitsgründen nicht mitkopiert."
+            "API- oder Serverzugänge, Mikrofon und Bedienungshilfen werden aus Sicherheitsgründen nicht mitkopiert."
         )
         HelpStep(
           number: "4", title: "Sprachmodelle laden",
@@ -826,10 +961,10 @@ struct SettingsView: View {
         )
         .foregroundStyle(.green)
         Label(
-          "Nur fertige Anfragen im MiddleAI-Modus werden an den eingestellten OpenWebUI-Server übertragen.",
+          "Nur fertige Anfragen im MiddleAI-Modus werden an den eingestellten Antwortanbieter übertragen.",
           systemImage: "server.rack")
         Label(
-          "Diktate für aktive Textfelder werden niemals an OpenWebUI gesendet.",
+          "Diktate für aktive Textfelder werden niemals an den Antwortanbieter gesendet.",
           systemImage: "text.cursor")
         Divider()
         HStack {
@@ -853,7 +988,7 @@ struct SettingsView: View {
           .pickerStyle(.menu)
         }
         Text(
-          "MiddleAI bereinigt beim Start nur seine lokale Routing-Kopie. Die Chats auf dem OpenWebUI-Server sind davon nicht betroffen."
+          "MiddleAI bereinigt beim Start nur seine lokale Routing-Kopie. Serverseitige Chats beim Anbieter sind davon nicht betroffen."
         )
         .font(.caption2).foregroundStyle(.secondary)
         HStack {
@@ -861,7 +996,7 @@ struct SettingsView: View {
             Text("Lokaler Gesprächscache").font(.callout.weight(.medium))
             Text(state.localCacheStatus).font(.caption).foregroundStyle(.secondary)
             Text(
-              "Das Löschen betrifft nur MiddleAI auf diesem Mac. Unterhaltungen in OpenWebUI bleiben erhalten."
+              "Das Löschen betrifft nur MiddleAI auf diesem Mac. Serverseitige Unterhaltungen bleiben erhalten."
             )
             .font(.caption2).foregroundStyle(.secondary)
           }
@@ -886,7 +1021,7 @@ struct SettingsView: View {
       Button("Abbrechen", role: .cancel) {}
     } message: {
       Text(
-        "OpenWebUI-Unterhaltungen werden nicht gelöscht. Nur die lokale Routing-Kopie auf diesem Mac wird entfernt."
+        "Serverseitige Unterhaltungen werden nicht gelöscht. Nur die lokale Routing-Kopie auf diesem Mac wird entfernt."
       )
     }
   }
@@ -905,6 +1040,45 @@ struct SettingsView: View {
   private var systemDefaultMicrophoneLabel: String {
     let defaultName = audioInputDevices.first(where: \AudioInputDevice.isSystemDefault)?.name
     return defaultName.map { "macOS-Standard · \($0)" } ?? "macOS-Standard"
+  }
+
+  private var systemDefaultSpeakerLabel: String {
+    let defaultName = audioOutputDevices.first(where: \.isSystemDefault)?.name
+    return defaultName.map { "macOS-Standard · \($0)" } ?? "macOS-Standard"
+  }
+
+  private var selectedSpeakerStatus: String {
+    if state.config.tts.outputDeviceUID == AudioOutputDeviceCatalog.systemDefaultUID {
+      return "Aktiv: \(systemDefaultSpeakerLabel)"
+    }
+    if let device = audioOutputDevices.first(where: { $0.uid == state.config.tts.outputDeviceUID })
+    {
+      return "Fest ausgewählt: \(device.name)"
+    }
+    return "Der gespeicherte Lautsprecher ist derzeit nicht angeschlossen"
+  }
+
+  private var assistantModelBinding: Binding<String> {
+    Binding(get: { state.config.assistantModel }, set: { state.config.assistantModel = $0 })
+  }
+
+  private var answerProviderDescription: String {
+    switch state.config.assistant.provider {
+    case "openai":
+      return
+        "Direkter Zugriff auf die OpenAI Platform. Abrechnung und Datenverarbeitung erfolgen über dein OpenAI-API-Konto; ein ChatGPT-Abo enthält kein API-Guthaben."
+    case "openrouter":
+      return
+        "Ein API-Schlüssel für viele Modellanbieter. Die Modellliste berücksichtigt nach Anmeldung deine OpenRouter-Freigaben und Datenschutzeinstellungen."
+    default:
+      return
+        "Verwendet deinen eigenen OpenWebUI-Arbeitsbereich einschließlich dessen Werkzeuge, Websuche und serverseitiger Chat-Historie."
+    }
+  }
+
+  private func refreshAudioDevices() {
+    audioInputDevices = AudioInputDeviceCatalog.availableDevices()
+    audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
   }
 
   private var selectedMicrophoneStatus: String {

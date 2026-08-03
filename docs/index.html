@@ -6,13 +6,13 @@
     <meta name="theme-color" content="#070911">
     <meta
       name="description"
-      content="MiddleAI ist die lokale Sprachschicht für macOS: Diktieren, OpenWebUI per Stimme nutzen und Antworten natürlich vorlesen lassen."
+      content="MiddleAI ist die lokale Sprachschicht für macOS: lokal diktieren, OpenWebUI, OpenAI oder OpenRouter per Stimme nutzen und Antworten natürlich vorlesen lassen."
     >
     <meta property="og:type" content="website">
     <meta property="og:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
     <meta
       property="og:description"
-      content="Lokales Diktat, intelligente OpenWebUI-Anfragen und natürliche Sprachausgabe – nativ für macOS."
+      content="Lokales Diktat, wählbare KI-Anbieter und natürliche Sprachausgabe – nativ für macOS."
     >
     <meta property="og:image" content="https://sschluet.github.io/middleai/assets/og.png">
     <meta property="og:url" content="https://sschluet.github.io/middleai/">
@@ -20,7 +20,7 @@
     <meta name="twitter:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
     <meta
       name="twitter:description"
-      content="Lokales Diktat und eine private Sprachschnittstelle zu OpenWebUI für macOS."
+      content="Lokales Diktat und eine Sprachschnittstelle zu OpenWebUI, OpenAI und OpenRouter für macOS."
     >
     <meta name="twitter:image" content="https://sschluet.github.io/middleai/assets/og.png">
     <link rel="canonical" href="https://sschluet.github.io/middleai/">
@@ -63,7 +63,7 @@
           <h1>Deine Stimme.<br><span>Dein Mac. Deine KI.</span></h1>
           <p class="hero-lead">
             MiddleAI verwandelt die beiden Optionstasten deines Macs in eine präzise
-            Diktierfunktion und eine private Sprachschnittstelle zu OpenWebUI.
+            Diktierfunktion und eine Sprachschnittstelle zu OpenWebUI, OpenAI oder OpenRouter.
           </p>
           <div class="hero-actions">
             <a class="button button-primary download-link" href="https://github.com/sschluet/middleai/releases/latest">
@@ -73,7 +73,7 @@
             <a class="button button-secondary" href="#how-it-works">So funktioniert es</a>
           </div>
           <div class="hero-meta">
-            <span class="version-label">Version 0.3.2</span>
+            <span class="version-label">Version 0.4.0</span>
             <span>macOS 14+</span>
             <span>Apache 2.0</span>
           </div>
@@ -114,7 +114,7 @@
                 </div>
                 <div class="shortcut-grid">
                   <div><span class="keycap">⌥ L</span><strong>Diktieren</strong><small>In jede App</small></div>
-                  <div><span class="keycap accent">⌥ R</span><strong>MiddleAI</strong><small>OpenWebUI fragen</small></div>
+                  <div><span class="keycap accent">⌥ R</span><strong>MiddleAI</strong><small>KI-Anbieter fragen</small></div>
                 </div>
               </div>
             </div>
@@ -128,7 +128,7 @@
         <div class="section-shell trust-grid">
           <div><strong>100 % lokal</strong><span>STT und TTS auf deinem Mac</span></div>
           <div><strong>2 Tasten</strong><span>Diktat und KI jederzeit bereit</span></div>
-          <div><strong>Private KI</strong><span>Deine bestehende OpenWebUI</span></div>
+          <div><strong>Freie Anbieterwahl</strong><span>OpenWebUI · OpenAI · OpenRouter</span></div>
           <div><strong>Open Source</strong><span>Transparent unter Apache 2.0</span></div>
         </div>
       </section>
@@ -158,10 +158,10 @@
             <div class="mode-key mode-key-accent" aria-hidden="true">⌥<small>rechts</small></div>
             <h3>Frag deine private KI.</h3>
             <p>
-              Die Anfrage geht an dein OpenWebUI-Modell. MiddleAI findet den passenden Chat,
+              Die Anfrage geht an dein gewähltes Modell. MiddleAI findet den passenden Chat,
               wartet auf die vollständige Antwort und liest eine kompakte Fassung vor.
             </p>
-            <div class="conversation-line"><i></i><span>Kontext erkannt</span><b>OpenWebUI</b></div>
+            <div class="conversation-line"><i></i><span>Kontext erkannt</span><b>Anbieter verbunden</b></div>
           </article>
         </div>
       </section>
@@ -222,6 +222,20 @@
             <p>Unter der MacBook-Notch oder freischwebend am externen Display: kompakt, fokussiert und immer sichtbar.</p>
             <div class="mini-island"><img src="assets/favicon.png" alt="" width="24" height="24"><span>Antwort wird zusammengefasst</span><i></i><i></i><i></i></div>
           </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">06</div>
+            <h3>Dein Anbieter. Dein Modell.</h3>
+            <p>Verbinde OpenWebUI, OpenAI Platform oder OpenRouter. Nach der Anmeldung lädt MiddleAI die verfügbaren Modelle direkt vom Anbieter; Schlüssel bleiben im macOS-Schlüsselbund.</p>
+            <div class="feature-tags"><span>OpenWebUI</span><span>OpenAI</span><span>OpenRouter</span></div>
+          </article>
+
+          <article class="feature-card reveal reveal-delay">
+            <div class="feature-number">07</div>
+            <h3>Audio folgt deinem Arbeitsplatz.</h3>
+            <p>Nutze für Mikrofon und Lautsprecher den jeweils aktuellen macOS-Standard oder binde MiddleAI fest an Headset, Studio-Mikrofon oder Monitor.</p>
+            <div class="feature-tags"><span>Core Audio</span><span>Automatisch</span><span>Feste Geräte</span></div>
+          </article>
         </div>
       </section>
 
@@ -233,7 +247,7 @@
             <p>
               Mikrofonaufnahme, Transkription, Diktatkorrektur, Zusammenfassung und
               Sprachausgabe laufen lokal. Nur die fertige Assistentenanfrage wird an die von
-              dir konfigurierte OpenWebUI gesendet.
+              dir konfigurierten Antwortanbieter gesendet.
             </p>
             <ul class="check-list">
               <li><span>✓</span>Keine Cloud-STT- oder Cloud-TTS-Dienste</li>
@@ -254,7 +268,7 @@
               <div class="local-result"><span>DIKTAT</span><b>Direkt in die Ziel-App</b><small>Der Text bleibt lokal.</small></div>
             </div>
             <div class="secure-bridge"><span>Nur Assistentenanfragen</span><i></i><small>TLS</small></div>
-            <div class="webui-node"><span>PRIVATE INSTANZ</span><strong>OpenWebUI</strong><small>Dein Modell. Deine Datenhoheit.</small></div>
+            <div class="webui-node"><span>ANTWORTANBIETER</span><strong>OpenWebUI · OpenAI · OpenRouter</strong><small>Du wählst Anbieter und Modell.</small></div>
           </div>
         </div>
       </section>
@@ -264,7 +278,7 @@
           <div class="intelligence-copy">
             <div class="section-kicker">Lokale Intelligenz nach Wahl</div>
             <h2>Du bestimmst,<br><span>was auf deinem Mac denkt.</span></h2>
-            <p>Nutze Apple Intelligence, einen lokalen Ollama- oder llama.cpp-Server oder ausschließlich die eingebauten MiddleAI-Regeln. OpenWebUI bleibt immer für die eigentliche Antwort zuständig.</p>
+            <p>Nutze Apple Intelligence, einen lokalen Ollama- oder llama.cpp-Server oder ausschließlich die eingebauten MiddleAI-Regeln. Der unter Verbindung gewählte Anbieter bleibt für die eigentliche Antwort zuständig.</p>
           </div>
           <div class="provider-stack" aria-label="Unterstützte lokale Intelligenzquellen">
             <div class="provider selected"><span>AI</span><div><strong>Apple Intelligence</strong><small>On-device Systemmodell</small></div><i>Empfohlen</i></div>
@@ -319,7 +333,7 @@
         <div class="faq-list reveal reveal-delay">
           <details>
             <summary>Läuft MiddleAI vollständig offline?<span>+</span></summary>
-            <p>Spracherkennung, Diktatkorrektur und Sprachausgabe laufen nach dem Modelldownload lokal. Für Assistentenanfragen benötigt MiddleAI Zugriff auf deine konfigurierte OpenWebUI-Instanz.</p>
+            <p>Spracherkennung, Diktatkorrektur und Sprachausgabe laufen nach dem Modelldownload lokal. Für Assistentenanfragen benötigt MiddleAI Zugriff auf den konfigurierten OpenWebUI-, OpenAI- oder OpenRouter-Endpunkt.</p>
           </details>
           <details>
             <summary>Kann ich MiddleAI auf einen anderen Mac kopieren?<span>+</span></summary>
@@ -335,7 +349,7 @@
           </details>
           <details>
             <summary>Ist MiddleAI kostenlos?<span>+</span></summary>
-            <p>MiddleAI ist unter der Apache-2.0-Lizenz als Open Source verfügbar. Beachte die separaten Lizenzen optionaler Sprachmodelle und die Betriebskosten deiner eigenen OpenWebUI-Infrastruktur.</p>
+            <p>MiddleAI ist unter der Apache-2.0-Lizenz als Open Source verfügbar. Beachte die separaten Lizenzen optionaler Sprachmodelle sowie mögliche API- oder Infrastrukturkosten deines Antwortanbieters.</p>
           </details>
         </div>
       </section>

@@ -16,6 +16,126 @@ extension TTSProvider {
   public func prepare() async throws {}
 }
 
+/// Shared application-level output preference. `system_default` deliberately leaves routing to
+/// macOS; a concrete Core Audio UID is applied only to MiddleAI's AVAudioPlayer instance.
+@MainActor public enum TTSOutputDevicePreference {
+  public static var uid = "system_default"
+}
+
+@MainActor private final class AudioFilePlayer: NSObject {
+  private var player: AVAudioPlayer?
+  private var continuation: CheckedContinuation<Void, Error>?
+  var isPlaying: Bool { player?.isPlaying == true }
+
+  func play(_ url: URL) async throws {
+    stop()
+    let next = try AVAudioPlayer(contentsOf: url)
+    if TTSOutputDevicePreference.uid != "system_default" {
+      next.currentDevice = TTSOutputDevicePreference.uid
+    }
+    next.delegate = self
+    next.prepareToPlay()
+    player = next
+    try await withCheckedThrowingContinuation { continuation in
+      self.continuation = continuation
+      if !next.play(), TTSOutputDevicePreference.uid != "system_default" {
+        next.currentDevice = nil
+        next.prepareToPlay()
+      }
+      guard next.isPlaying || next.play() else {
+        self.continuation = nil
+        self.player = nil
+        continuation.resume(
+          throwing: MiddleAIError.invalidResponse("Es ist kein Ausgabegerät verfügbar"))
+        return
+      }
+    }
+  }
+
+  func stop() {
+    player?.stop()
+    player = nil
+    continuation?.resume()
+    continuation = nil
+  }
+
+  fileprivate func didFinish(successfully flag: Bool) {
+    self.player = nil
+    let pending = continuation
+    continuation = nil
+    if flag {
+      pending?.resume()
+    } else {
+      pending?.resume(
+        throwing: MiddleAIError.invalidResponse("Die Audiowiedergabe wurde unterbrochen"))
+    }
+  }
+
+  fileprivate func didFail(_ error: Error?) {
+    self.player = nil
+    let pending = continuation
+    continuation = nil
+    pending?.resume(
+      throwing: error ?? MiddleAIError.invalidResponse("Audio konnte nicht dekodiert werden"))
+  }
+}
+
+private final class SpeechAudioRenderer: @unchecked Sendable {
+  private let lock = NSLock()
+  private let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+    "middleai-system-voice-\(UUID().uuidString).caf")
+  private var file: AVAudioFile?
+  private var continuation: CheckedContinuation<URL, Error>?
+  private var completed = false
+
+  @MainActor func render(_ utterance: AVSpeechUtterance, with synthesizer: AVSpeechSynthesizer)
+    async throws
+    -> URL
+  {
+    try await withCheckedThrowingContinuation { continuation in
+      lock.lock()
+      self.continuation = continuation
+      lock.unlock()
+      synthesizer.write(utterance) { [self] buffer in consume(buffer) }
+    }
+  }
+
+  private func consume(_ buffer: AVAudioBuffer) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return }
+    guard let pcm = buffer as? AVAudioPCMBuffer else {
+      complete(.failure(MiddleAIError.invalidResponse("Systemstimme lieferte kein PCM-Audio")))
+      return
+    }
+    if pcm.frameLength == 0 {
+      complete(.success(url))
+      return
+    }
+    do {
+      if file == nil { file = try AVAudioFile(forWriting: url, settings: pcm.format.settings) }
+      try file?.write(from: pcm)
+    } catch { complete(.failure(error)) }
+  }
+
+  private func complete(_ result: Result<URL, Error>) {
+    completed = true
+    file = nil
+    let pending = continuation
+    continuation = nil
+    pending?.resume(with: result)
+  }
+}
+
+extension AudioFilePlayer: @preconcurrency AVAudioPlayerDelegate {
+  func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    didFinish(successfully: flag)
+  }
+  func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+    didFail(error)
+  }
+}
+
 public struct TTSVoiceDescriptor: Identifiable, Hashable, Sendable {
   public let id: String
   public let name: String
@@ -434,6 +554,7 @@ public enum SpeechTextProcessor {
 
 @MainActor public final class MacOSTTSProvider: NSObject, TTSProvider {
   private let synthesizer = AVSpeechSynthesizer()
+  private let audioPlayer = AudioFilePlayer()
   private var continuation: CheckedContinuation<Void, Error>?
   public var voice: String
   public var rate: Float
@@ -443,7 +564,7 @@ public enum SpeechTextProcessor {
     super.init()
     synthesizer.delegate = self
   }
-  public var isSpeaking: Bool { synthesizer.isSpeaking }
+  public var isSpeaking: Bool { synthesizer.isSpeaking || audioPlayer.isPlaying }
   public func speak(_ text: String) async throws {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     if isSpeaking { stop() }
@@ -453,13 +574,21 @@ public enum SpeechTextProcessor {
       AVSpeechUtteranceMinimumSpeechRate,
       min(AVSpeechUtteranceMaximumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * rate * 0.96))
     utterance.pitchMultiplier = 1.0
-    try await withCheckedThrowingContinuation { c in
-      continuation = c
-      synthesizer.speak(utterance)
+    if TTSOutputDevicePreference.uid == "system_default" {
+      try await withCheckedThrowingContinuation { c in
+        continuation = c
+        synthesizer.speak(utterance)
+      }
+    } else {
+      let renderer = SpeechAudioRenderer()
+      let audioURL = try await renderer.render(utterance, with: synthesizer)
+      defer { try? FileManager.default.removeItem(at: audioURL) }
+      try await audioPlayer.play(audioURL)
     }
   }
   public func stop() {
     synthesizer.stopSpeaking(at: .immediate)
+    audioPlayer.stop()
     continuation?.resume()
     continuation = nil
   }
@@ -505,9 +634,8 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private let manager: PocketTtsManager
   private let voice: String
   private let temperature: Float
-  private var playbackProcess: Process?
+  private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
-  private var continuation: CheckedContinuation<Void, Error>?
   private var initializationTask: Task<Void, Error>?
   private var initialized = false
   private var generation: UInt64 = 0
@@ -524,7 +652,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     super.init()
   }
 
-  public var isSpeaking: Bool { isPreparing || playbackProcess?.isRunning == true }
+  public var isSpeaking: Bool { isPreparing || audioPlayer.isPlaying }
 
   public func prepare() async throws {
     try await ensureInitialized()
@@ -549,31 +677,10 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
       let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
         "middleai-pockettts-\(UUID().uuidString).wav")
       try audio.write(to: audioURL, options: .atomic)
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-      process.arguments = [audioURL.path]
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
-      playbackProcess = process
       temporaryAudioURL = audioURL
+      defer { cleanupTemporaryAudio() }
       isPreparing = false
-      try await withCheckedThrowingContinuation { (next: CheckedContinuation<Void, Error>) in
-        continuation = next
-        process.terminationHandler = { [weak self] finishedProcess in
-          Task { @MainActor in
-            self?.finishPlayback(successfully: finishedProcess.terminationStatus == 0)
-          }
-        }
-        do {
-          try process.run()
-        } catch {
-          process.terminationHandler = nil
-          playbackProcess = nil
-          continuation = nil
-          cleanupTemporaryAudio()
-          next.resume(throwing: error)
-        }
-      }
+      try await audioPlayer.play(audioURL)
     } catch {
       isPreparing = false
       throw error
@@ -582,25 +689,9 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
 
   public func stop() {
     generation &+= 1
-    playbackProcess?.terminationHandler = nil
-    if playbackProcess?.isRunning == true { playbackProcess?.terminate() }
-    playbackProcess = nil
+    audioPlayer.stop()
     cleanupTemporaryAudio()
     isPreparing = false
-    continuation?.resume()
-    continuation = nil
-  }
-
-  private func finishPlayback(successfully: Bool) {
-    playbackProcess = nil
-    cleanupTemporaryAudio()
-    if successfully {
-      continuation?.resume()
-    } else {
-      continuation?.resume(
-        throwing: MiddleAIError.invalidResponse("PocketTTS audio playback was interrupted"))
-    }
-    continuation = nil
   }
 
   private func cleanupTemporaryAudio() {
@@ -634,9 +725,8 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private let speed: Float
   private let totalSteps: Int
   private var style: Supertonic3VoiceStyle?
-  private var playbackProcess: Process?
+  private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
-  private var continuation: CheckedContinuation<Void, Error>?
   private var initializationTask: Task<Void, Error>?
   private var initialized = false
   private var generation: UInt64 = 0
@@ -649,7 +739,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     super.init()
   }
 
-  public var isSpeaking: Bool { isPreparing || playbackProcess?.isRunning == true }
+  public var isSpeaking: Bool { isPreparing || audioPlayer.isPlaying }
 
   public func prepare() async throws {
     try await ensureInitialized()
@@ -681,31 +771,10 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
       let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
         "middleai-supertonic3-\(UUID().uuidString).wav")
       try audio.write(to: audioURL, options: .atomic)
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-      process.arguments = [audioURL.path]
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
-      playbackProcess = process
       temporaryAudioURL = audioURL
+      defer { cleanupTemporaryAudio() }
       isPreparing = false
-      try await withCheckedThrowingContinuation { (next: CheckedContinuation<Void, Error>) in
-        continuation = next
-        process.terminationHandler = { [weak self] finishedProcess in
-          Task { @MainActor in
-            self?.finishPlayback(successfully: finishedProcess.terminationStatus == 0)
-          }
-        }
-        do {
-          try process.run()
-        } catch {
-          process.terminationHandler = nil
-          playbackProcess = nil
-          continuation = nil
-          cleanupTemporaryAudio()
-          next.resume(throwing: error)
-        }
-      }
+      try await audioPlayer.play(audioURL)
     } catch {
       isPreparing = false
       throw error
@@ -714,25 +783,9 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
 
   public func stop() {
     generation &+= 1
-    playbackProcess?.terminationHandler = nil
-    if playbackProcess?.isRunning == true { playbackProcess?.terminate() }
-    playbackProcess = nil
+    audioPlayer.stop()
     cleanupTemporaryAudio()
     isPreparing = false
-    continuation?.resume()
-    continuation = nil
-  }
-
-  private func finishPlayback(successfully: Bool) {
-    playbackProcess = nil
-    cleanupTemporaryAudio()
-    if successfully {
-      continuation?.resume()
-    } else {
-      continuation?.resume(
-        throwing: MiddleAIError.invalidResponse("Supertonic audio playback was interrupted"))
-    }
-    continuation = nil
   }
 
   private func cleanupTemporaryAudio() {
@@ -819,9 +872,8 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
 
   private let voicePrompt: String
   private var model: SendableSpeechGenerationModel?
-  private var playbackProcess: Process?
+  private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
-  private var continuation: CheckedContinuation<Void, Error>?
   private var generation: UInt64 = 0
   private var isPreparing = false
 
@@ -830,7 +882,7 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     _ = temperature
   }
 
-  public var isSpeaking: Bool { isPreparing || playbackProcess?.isRunning == true }
+  public var isSpeaking: Bool { isPreparing || audioPlayer.isPlaying }
 
   public func prepare() async throws {
     _ = try await ensureModel()
@@ -854,31 +906,10 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
       let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
         "middleai-qwen3-tts-\(UUID().uuidString).wav")
       try wav.write(to: audioURL, options: Data.WritingOptions.atomic)
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-      process.arguments = [audioURL.path]
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
-      playbackProcess = process
       temporaryAudioURL = audioURL
+      defer { cleanupTemporaryAudio() }
       isPreparing = false
-      try await withCheckedThrowingContinuation { (next: CheckedContinuation<Void, Error>) in
-        continuation = next
-        process.terminationHandler = { [weak self] finishedProcess in
-          Task { @MainActor in
-            self?.finishPlayback(successfully: finishedProcess.terminationStatus == 0)
-          }
-        }
-        do {
-          try process.run()
-        } catch {
-          process.terminationHandler = nil
-          playbackProcess = nil
-          continuation = nil
-          cleanupTemporaryAudio()
-          next.resume(throwing: error)
-        }
-      }
+      try await audioPlayer.play(audioURL)
     } catch {
       isPreparing = false
       throw error
@@ -887,13 +918,9 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
 
   public func stop() {
     generation &+= 1
-    playbackProcess?.terminationHandler = nil
-    if playbackProcess?.isRunning == true { playbackProcess?.terminate() }
-    playbackProcess = nil
+    audioPlayer.stop()
     cleanupTemporaryAudio()
     isPreparing = false
-    continuation?.resume()
-    continuation = nil
   }
 
   private func ensureModel() async throws -> SendableSpeechGenerationModel {
@@ -902,18 +929,6 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     let wrapped = SendableSpeechGenerationModel(raw: loaded)
     model = wrapped
     return wrapped
-  }
-
-  private func finishPlayback(successfully: Bool) {
-    playbackProcess = nil
-    cleanupTemporaryAudio()
-    if successfully {
-      continuation?.resume()
-    } else {
-      continuation?.resume(
-        throwing: MiddleAIError.invalidResponse("Qwen3-TTS audio playback was interrupted"))
-    }
-    continuation = nil
   }
 
   private func cleanupTemporaryAudio() {
@@ -946,8 +961,7 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   private var isPreparing = false
   private var readyContinuation: CheckedContinuation<Void, Error>?
   private var generationContinuation: CheckedContinuation<URL, Error>?
-  private var playbackProcess: Process?
-  private var playbackContinuation: CheckedContinuation<Void, Error>?
+  private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
 
   public init(voice: String) {
@@ -980,7 +994,7 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   }
 
   public var isSpeaking: Bool {
-    isPreparing || generationContinuation != nil || playbackProcess?.isRunning == true
+    isPreparing || generationContinuation != nil || audioPlayer.isPlaying
   }
 
   public func prepare() async throws {
@@ -1322,44 +1336,12 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   }
 
   private func play(_ url: URL) async throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-    process.arguments = [url.path]
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    playbackProcess = process
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      playbackContinuation = continuation
-      process.terminationHandler = { [weak self] ended in
-        Task { @MainActor in
-          guard let self, self.playbackProcess === ended else { return }
-          self.playbackProcess = nil
-          self.cleanupTemporaryAudio()
-          let pending = self.playbackContinuation
-          self.playbackContinuation = nil
-          if ended.terminationStatus == 0 {
-            pending?.resume()
-          } else {
-            pending?.resume(
-              throwing: MiddleAIError.invalidResponse("Voxtral-Wiedergabe abgebrochen"))
-          }
-        }
-      }
-      do { try process.run() } catch {
-        playbackContinuation = nil
-        playbackProcess = nil
-        continuation.resume(throwing: error)
-      }
-    }
+    defer { cleanupTemporaryAudio() }
+    try await audioPlayer.play(url)
   }
 
   private func stopPlayback() {
-    playbackProcess?.terminationHandler = nil
-    if playbackProcess?.isRunning == true { playbackProcess?.terminate() }
-    playbackProcess = nil
-    playbackContinuation?.resume()
-    playbackContinuation = nil
+    audioPlayer.stop()
     cleanupTemporaryAudio()
   }
 

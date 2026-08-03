@@ -282,7 +282,7 @@ import OSLog
     overlay.update(phase: .thinking, detail: text)
     assistantRequestActive = true
     onStarted()
-    onStatus("OpenWebUI verarbeitet die Sprachanfrage")
+    onStatus("Der KI-Anbieter verarbeitet die Sprachanfrage")
     processingTask = Task { [weak self] in
       guard let self else { return }
       do {

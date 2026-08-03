@@ -51,7 +51,7 @@ enum VoicePhase: Sendable {
     case .listening: return mode.title
     case .transcribing: return "Lokal transkribieren"
     case .polishing: return "Diktat lokal glätten"
-    case .thinking: return "OpenWebUI antwortet"
+    case .thinking: return "KI-Anbieter antwortet"
     case .result: return mode == .dictation ? "Text eingefügt" : "Antwort wird vorgelesen"
     case .error: return "Nicht geklappt"
     }

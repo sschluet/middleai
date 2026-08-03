@@ -47,6 +47,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
       ("OpenWebUI cancellation", testResponseCancellation),
       ("OpenWebUI adapter", testAdapter),
+      ("Hosted provider model discovery", testHostedProviderModels),
     ]
     for (name, test) in tests {
       do {
@@ -64,6 +65,8 @@ struct FixedRouter: ConversationRoutingStrategy {
   static func testConfig() async throws {
     var c = AppConfig()
     c.openwebui.url = "https://ai.internal"
+    c.assistant.provider = "openrouter"
+    c.openrouter.model = "anthropic/claude-sonnet-4"
     c.dictation.polishWithLocalAI = false
     c.dictation.smartFormatting = false
     c.dictation.formattingApplications = ["com.microsoft.Word", "com.example.Editor"]
@@ -73,6 +76,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.hotkeys.dictation = "left_control"
     c.hotkeys.assistant = "right_command"
     c.tts.localCommand = "/tmp/model #1/\"voice\""
+    c.tts.outputDeviceUID = "test-output-device"
     c.stt.encoderPrecision = "int4"
     c.stt.computeMode = "fast"
     c.stt.language = "auto"
@@ -82,6 +86,10 @@ struct FixedRouter: ConversationRoutingStrategy {
     let parsed = try ConfigLoader.parseYAML(rendered)
     try expect(rendered.contains("\"schema_version\" : 1"), "configuration schema version")
     try expect(parsed.openwebui.url == "https://ai.internal", "URL round-trip")
+    try expect(
+      parsed.assistant.provider == "openrouter"
+        && parsed.assistantModel == "anthropic/claude-sonnet-4",
+      "answer provider and model round-trip")
     try expect(parsed.openwebui.tlsVerify, "TLS default")
     try expect(parsed.tts.localOnly, "local TTS")
     try expect(parsed.tts.provider == "adaptive", "adaptive German TTS default")
@@ -113,6 +121,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command",
       "activation keys round-trip")
     try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
+    try expect(parsed.tts.outputDeviceUID == "test-output-device", "output device round-trip")
     try expect(
       parsed.stt.encoderPrecision == "int4" && parsed.stt.computeMode == "fast"
         && parsed.stt.language == "auto" && parsed.stt.inputDeviceUID == "test-input-device",
@@ -625,6 +634,51 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(fallbackTokens.values == ["Fallback Antwort"], "fallback content delivered once")
     try expect(completionAttempts.value == 2, "streaming rejection retried exactly once")
   }
+
+  static func testHostedProviderModels() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [MockProtocol.self]
+    let session = URLSession(configuration: configuration)
+    let credentials = MemoryCredentialStore()
+    try credentials.save("sk-test", account: HostedAIProvider.openai.credentialAccount)
+    MockProtocol.handler = { request in
+      guard request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-test" else {
+        return (401, Data())
+      }
+      let data = try JSONSerialization.data(withJSONObject: [
+        "data": [
+          ["id": "gpt-5.6-terra"], ["id": "text-embedding-3-large"],
+          ["id": "gpt-5.6-sol"],
+        ]
+      ])
+      return (200, data)
+    }
+    let client = HostedAIClient(
+      provider: .openai, credentials: credentials, session: session)
+    let models = try await client.models()
+    try expect(models == ["gpt-5.6-sol", "gpt-5.6-terra"], "hosted chat model filtering")
+
+    MockProtocol.handler = { request in
+      guard request.url?.path == "/v1/chat/completions",
+        request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-test"
+      else { return (400, Data()) }
+      let stream = """
+        data: {"choices":[{"delta":{"content":"Hallo "}}]}
+
+        data: {"choices":[{"delta":{"content":"Welt."}}]}
+
+        data: [DONE]
+
+        """
+      return (200, Data(stream.utf8))
+    }
+    let tokens = LockedTokens()
+    let response = try await client.send(
+      messages: [Message(role: .user, content: "Test")], chatID: "local", model: "gpt-5.6-terra"
+    ) { tokens.append($0) }
+    try expect(response == "Hallo Welt.", "hosted streaming response")
+    try expect(tokens.values == ["Hallo ", "Welt."], "hosted streaming token delivery")
+  }
 }
 
 @MainActor final class RecordingTTS: TTSProvider {
@@ -645,7 +699,7 @@ struct FixedRouter: ConversationRoutingStrategy {
 struct StaticAuth: AuthProvider {
   func token(baseURL: URL, session: URLSession) async throws -> String { "test-token" }
 }
-struct FixedResponseClient: OpenWebUIClientProtocol {
+struct FixedResponseClient: AssistantClientProtocol {
   func authenticate() async throws {}
   func health() async throws {}
   func models() async throws -> [String] { ["test-model"] }
@@ -663,7 +717,7 @@ struct FixedResponseClient: OpenWebUIClientProtocol {
   func listChats() async throws -> [(id: String, title: String)] { [] }
   func chatURL(id: String) -> URL { URL(string: "https://example.test/c/\(id)")! }
 }
-final class SlowResponseClient: OpenWebUIClientProtocol, @unchecked Sendable {
+final class SlowResponseClient: AssistantClientProtocol, @unchecked Sendable {
   private let lock = NSLock()
   private var cancelled: String?
   var cancelledChatID: String? { lock.withLock { cancelled } }

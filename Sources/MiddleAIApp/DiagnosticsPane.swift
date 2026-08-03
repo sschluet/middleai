@@ -9,7 +9,7 @@ struct DiagnosticsPane: View {
       SettingsCard(
         title: "Systemdiagnose",
         subtitle:
-          "Prüft Konfiguration, lokale Dienste und OpenWebUI ohne Sprachinhalte zu protokollieren",
+          "Prüft Konfiguration, lokale Dienste und den Antwortanbieter ohne Sprachinhalte zu protokollieren",
         symbol: "stethoscope"
       ) {
         if state.diagnosticChecks.isEmpty {
@@ -66,7 +66,7 @@ struct DiagnosticsPane: View {
         symbol: "hand.raised.fill"
       ) {
         Label("Keine Passwörter, Tokens oder Schlüsselbundinhalte", systemImage: "key.slash")
-        Label("Keine Diktate, Prompts oder OpenWebUI-Antworten", systemImage: "text.badge.xmark")
+        Label("Keine Diktate, Prompts oder Anbieter-Antworten", systemImage: "text.badge.xmark")
         Label("Serveradressen werden im Export ausgeblendet", systemImage: "network.slash")
       }
     }

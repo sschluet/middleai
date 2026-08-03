@@ -22,6 +22,17 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertEqual(parsed.stt, config.stt)
   }
 
+  func testHostedProviderAndAudioOutputRoundTrip() throws {
+    var config = AppConfig()
+    config.assistant.provider = "openai"
+    config.openai.model = "gpt-5.6-terra"
+    config.tts.outputDeviceUID = "speaker-uid"
+    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    XCTAssertEqual(parsed.assistant.provider, "openai")
+    XCTAssertEqual(parsed.assistantModel, "gpt-5.6-terra")
+    XCTAssertEqual(parsed.tts.outputDeviceUID, "speaker-uid")
+  }
+
   func testResearchFallbackSelectsConclusionsAndNextSteps() {
     let response =
       "Die Recherche umfasst fünf Märkte und zahlreiche Quellen. "

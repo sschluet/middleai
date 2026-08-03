@@ -8,7 +8,7 @@ public enum InputResult: Sendable, Equatable {
 
 @MainActor public final class MiddleAIEngine {
   public let manager: ConversationManager
-  public let client: any OpenWebUIClientProtocol
+  public let client: any AssistantClientProtocol
   public let ttsQueue: TTSQueue
   private let pipeline: ResponsePipeline
   private let detector = CommandDetector()
@@ -21,7 +21,7 @@ public enum InputResult: Sendable, Equatable {
   private var activeChatID: String?
   public private(set) var activeProfile: String
   public init(
-    manager: ConversationManager, client: any OpenWebUIClientProtocol, ttsQueue: TTSQueue,
+    manager: ConversationManager, client: any AssistantClientProtocol, ttsQueue: TTSQueue,
     config: AppConfig, profiles: ProfileStore = ProfileStore()
   ) {
     self.manager = manager
@@ -68,7 +68,7 @@ public enum InputResult: Sendable, Equatable {
     if let prompt = profiles.profiles[activeProfile]?.systemPrompt, !prompt.isEmpty {
       requestMessages.insert(Message(role: .system, content: prompt), at: 0)
     }
-    let remoteScope = Self.remoteScope(config.openwebui.url)
+    let remoteScope = Self.remoteScope(config.assistantScope)
     if conversation.openWebUIChatID == nil || conversation.openWebUIBaseURL != remoteScope {
       conversation.openWebUIChatID = try await client.createChat(
         title: conversation.title, messages: requestMessages, model: model)
@@ -77,10 +77,10 @@ public enum InputResult: Sendable, Equatable {
       logger.event("new_conversation_created")
     }
     guard let chatID = conversation.openWebUIChatID else {
-      throw MiddleAIError.invalidResponse("Missing Open WebUI chat id")
+      throw MiddleAIError.invalidResponse("Missing provider conversation id")
     }
     let requestStarted = Date()
-    logger.event("openwebui_request_started")
+    logger.event("assistant_request_started", metadata: ["provider": config.assistant.provider])
     let requestID = UUID()
     activeRequestID = requestID
     activeChatID = chatID
@@ -132,11 +132,11 @@ public enum InputResult: Sendable, Equatable {
         || (error as? URLError)?.code == .cancelled
       {
         if activeRequestID == requestID { pipeline.interrupt() }
-        logger.event("openwebui_request_cancelled")
+        logger.event("assistant_request_cancelled")
         throw CancellationError()
       }
-      ttsQueue.enqueue("Open WebUI ist momentan nicht erreichbar.")
-      logger.error("openwebui_request_failed")
+      ttsQueue.enqueue("Der ausgewählte KI-Anbieter ist momentan nicht erreichbar.")
+      logger.error("assistant_request_failed_\(config.assistant.provider)")
       throw error
     }
     pipeline.finish()
@@ -177,7 +177,7 @@ public enum InputResult: Sendable, Equatable {
   }
   private var model: String {
     let profileModel = profiles.profiles[activeProfile]?.model ?? ""
-    return profileModel.isEmpty ? config.openwebui.model : profileModel
+    return profileModel.isEmpty ? config.assistantModel : profileModel
   }
   private func handle(_ command: LocalCommand) throws -> InputResult {
     switch command {
@@ -257,18 +257,8 @@ public enum MiddleAIFactory {
       ? heuristic : HybridRouter(heuristic: heuristic, llm: llm)
     let manager = ConversationManager(
       store: store, router: router, confidenceAsk: config.routing.confidenceAsk)
-    guard let url = URL(string: config.openwebui.url) else {
-      throw MiddleAIError.configuration("Invalid Open WebUI URL")
-    }
-    let scopedCredentials = ScopedCredentialStore(
-      base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
-    let auth: any AuthProvider =
-      config.openwebui.authMethod == "api_key"
-      ? APIKeyAuthProvider(credentials: scopedCredentials)
-      : PasswordAuthProvider(username: config.openwebui.username, credentials: scopedCredentials)
-    let client = OpenWebUIClient(
-      baseURL: url, auth: auth, tlsVerify: config.openwebui.tlsVerify,
-      caFile: config.openwebui.caFile)
+    let client = try makeAssistantClient(config: config, credentials: credentials)
+    TTSOutputDevicePreference.uid = config.tts.outputDeviceUID
     let native = MacOSTTSProvider(voice: config.tts.voice, rate: config.tts.rate)
     let provider: any TTSProvider
     switch config.tts.provider {
@@ -308,5 +298,29 @@ public enum MiddleAIFactory {
     return MiddleAIEngine(
       manager: manager, client: client,
       ttsQueue: TTSQueue(provider: provider, enabled: config.tts.enabled), config: config)
+  }
+
+  public static func makeAssistantClient(
+    config: AppConfig, credentials: any CredentialStore
+  ) throws -> any AssistantClientProtocol {
+    switch config.assistant.provider {
+    case "openai":
+      return HostedAIClient(provider: .openai, credentials: credentials)
+    case "openrouter":
+      return HostedAIClient(provider: .openrouter, credentials: credentials)
+    default:
+      guard let url = URL(string: config.openwebui.url) else {
+        throw MiddleAIError.configuration("Invalid Open WebUI URL")
+      }
+      let scopedCredentials = ScopedCredentialStore(
+        base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
+      let auth: any AuthProvider =
+        config.openwebui.authMethod == "api_key"
+        ? APIKeyAuthProvider(credentials: scopedCredentials)
+        : PasswordAuthProvider(username: config.openwebui.username, credentials: scopedCredentials)
+      return OpenWebUIClient(
+        baseURL: url, auth: auth, tlsVerify: config.openwebui.tlsVerify,
+        caFile: config.openwebui.caFile)
+    }
   }
 }

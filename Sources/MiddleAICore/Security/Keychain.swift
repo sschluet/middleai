@@ -123,8 +123,14 @@ public struct EnvironmentCredentialStore: CredentialStore, Sendable {
     throw MiddleAIError.configuration("Environment credentials are read-only")
   }
   public func read(account: String) throws -> String? {
-    ProcessInfo.processInfo.environment[
-      account == "password" ? "MIDDLEAI_OPENWEBUI_PASSWORD" : "MIDDLEAI_\(account.uppercased())"]
+    let name: String
+    switch account {
+    case "password": name = "MIDDLEAI_OPENWEBUI_PASSWORD"
+    case HostedAIProvider.openai.credentialAccount: name = "MIDDLEAI_OPENAI_API_KEY"
+    case HostedAIProvider.openrouter.credentialAccount: name = "MIDDLEAI_OPENROUTER_API_KEY"
+    default: name = "MIDDLEAI_\(account.uppercased().replacingOccurrences(of: ".", with: "_"))"
+    }
+    return ProcessInfo.processInfo.environment[name]
   }
   public func delete(account: String) throws {}
 }

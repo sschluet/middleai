@@ -1,6 +1,13 @@
 import Foundation
 
 public struct AppConfig: Codable, Equatable, Sendable {
+  public struct Assistant: Codable, Equatable, Sendable {
+    /// `openwebui`, `openai`, or `openrouter`.
+    public var provider = "openwebui"
+  }
+  public struct HostedAI: Codable, Equatable, Sendable {
+    public var model = ""
+  }
   public struct OpenWebUI: Codable, Equatable, Sendable {
     public var url = "http://127.0.0.1:3000"
     public var authMethod = "password"
@@ -31,6 +38,8 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var quality = "high"
     public var temperature: Float = 0.65
     public var localCommand = ""
+    /// Core Audio device UID, or `system_default` to follow the macOS output selection.
+    public var outputDeviceUID = "system_default"
   }
   public struct STT: Codable, Equatable, Sendable {
     /// Parakeet TDT v3 is the multilingual model supported by MiddleAI.
@@ -85,7 +94,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// Number of days to retain MiddleAI's local routing copy. Zero keeps it indefinitely.
     public var localCacheRetentionDays = 90
   }
+  public var assistant = Assistant()
   public var openwebui = OpenWebUI()
+  public var openai = HostedAI()
+  public var openrouter = HostedAI()
   public var routing = Routing()
   public var localLLM = LocalLLM()
   public var tts = TTS()
@@ -101,6 +113,39 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public var activeProfile = "default"
 
   public init() {}
+
+  public var assistantModel: String {
+    get {
+      switch assistant.provider {
+      case "openai": return openai.model
+      case "openrouter": return openrouter.model
+      default: return openwebui.model
+      }
+    }
+    set {
+      switch assistant.provider {
+      case "openai": openai.model = newValue
+      case "openrouter": openrouter.model = newValue
+      default: openwebui.model = newValue
+      }
+    }
+  }
+
+  public var assistantProviderTitle: String {
+    switch assistant.provider {
+    case "openai": return "OpenAI"
+    case "openrouter": return "OpenRouter"
+    default: return "OpenWebUI"
+    }
+  }
+
+  public var assistantScope: String {
+    switch assistant.provider {
+    case "openai": return "openai://platform"
+    case "openrouter": return "openrouter://platform"
+    default: return openwebui.url
+    }
+  }
 }
 
 public enum ConfigLoader {
@@ -241,6 +286,7 @@ public enum ConfigLoader {
       let key = snake(parts[0])
       let value = try unquote(parts[1].trimmingCharacters(in: .whitespaces))
       switch (section, key) {
+      case ("assistant", "provider"): c.assistant.provider = value
       case ("openwebui", "url"): c.openwebui.url = value
       case ("openwebui", "auth_method"): c.openwebui.authMethod = value
       case ("openwebui", "username"): c.openwebui.username = value
@@ -268,6 +314,9 @@ public enum ConfigLoader {
       case ("tts", "temperature"):
         c.tts.temperature = Float(try legacyDouble(value, line: index))
       case ("tts", "local_command"): c.tts.localCommand = value
+      case ("tts", "output_device_uid"): c.tts.outputDeviceUID = value
+      case ("openai", "model"): c.openai.model = value
+      case ("openrouter", "model"): c.openrouter.model = value
       case ("stt", "model"): c.stt.model = value
       case ("stt", "language"): c.stt.language = value
       case ("stt", "encoder_precision"): c.stt.encoderPrecision = value
@@ -316,6 +365,9 @@ public enum ConfigLoader {
   }
 
   private static func validate(_ c: AppConfig) throws {
+    guard ["openwebui", "openai", "openrouter"].contains(c.assistant.provider) else {
+      throw MiddleAIError.configuration("assistant.provider is invalid")
+    }
     guard let webURL = URL(string: c.openwebui.url), ["http", "https"].contains(webURL.scheme),
       webURL.user == nil, webURL.password == nil
     else {
@@ -351,7 +403,9 @@ public enum ConfigLoader {
     else {
       throw MiddleAIError.configuration("Routing confidence thresholds are invalid")
     }
-    guard c.tts.rate.isFinite, c.tts.rate > 0, c.tts.temperature.isFinite else {
+    guard c.tts.rate.isFinite, c.tts.rate > 0, c.tts.temperature.isFinite,
+      !c.tts.outputDeviceUID.isEmpty, c.tts.outputDeviceUID.count <= 512
+    else {
       throw MiddleAIError.configuration("TTS numeric settings are invalid")
     }
     guard c.stt.model == "parakeet_tdt_v3",

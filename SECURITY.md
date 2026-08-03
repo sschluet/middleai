@@ -1,8 +1,10 @@
 # Security
 
-MiddleAI is local-first and transmits only the user's request and cached conversation context to the explicitly configured private Open WebUI instance.
+MiddleAI is local-first and transmits only the user's assistant-mode request and required cached conversation context to the explicitly selected OpenWebUI, OpenAI Platform or OpenRouter endpoint.
 
-- Passwords/API tokens are read from macOS Keychain; configuration and logs contain no credentials.
+- Passwords/API tokens are read from provider-specific macOS Keychain accounts; configuration and logs contain no credentials.
+- OpenRouter receives the optional application attribution headers documented by the provider. No device name, account name or microphone data is included.
+- Switching the answer provider starts a new local conversation so cached context from one provider is not forwarded to another implicitly.
 - `.env` is gitignored and supported only as a development password fallback.
 - TLS verification defaults to on. A private CA may be added without disabling the system trust store.
 - The HTTP listener accepts only `127.0.0.1` or `::1`; `0.0.0.0` is rejected during config parsing and server startup.
@@ -15,7 +17,7 @@ MiddleAI is local-first and transmits only the user's request and cached convers
 - Optional Apple Intelligence dictation polishing runs on-device. Candidate corrections are rejected if protected terms or numbers change or if the wording diverges substantially from the transcript.
 - Plain dictation uses the focused accessibility element when supported. Rich-text fallback briefly uses the macOS pasteboard, restores its prior items after app-specific delays and does not log the transcript.
 - INFO logging accepts only an allow-list of event metadata such as source, latency and sizes—not prompt/response text, usernames or arbitrary fields.
-- There is no analytics, telemetry, crash upload or automatic external data transfer.
+- There is no analytics, telemetry or crash upload. External transfer occurs only for assistant requests, explicit model downloads and user-triggered provider model discovery.
 
 Optional model downloads remain subject to their own licenses. Voxtral is CC BY-NC 4.0 and must not be used for commercial or business purposes. See `THIRD_PARTY_NOTICES.md` for sources and terms.
 

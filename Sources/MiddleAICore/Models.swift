@@ -128,10 +128,11 @@ public enum MiddleAIError: LocalizedError, Equatable {
     case .storage(let s): return "Speicherfehler: \(s)"
     case .authentication:
       return
-        "Die Anmeldung bei OpenWebUI ist fehlgeschlagen. Bitte Benutzername und Passwort prüfen."
-    case .network(let s): return "OpenWebUI-Fehler: \(s)"
-    case .invalidResponse(let s): return "OpenWebUI hat eine unerwartete Antwort geliefert: \(s)"
-    case .noModel: return "Es ist keine OpenWebUI-Modell-ID eingestellt."
+        "Die Anmeldung beim KI-Anbieter ist fehlgeschlagen. Bitte Zugangsdaten prüfen."
+    case .network(let s): return "Anbieter-Fehler: \(s)"
+    case .invalidResponse(let s):
+      return "Der KI-Anbieter hat eine unerwartete Antwort geliefert: \(s)"
+    case .noModel: return "Es ist keine Modell-ID für den Antwortanbieter eingestellt."
     }
   }
 }
