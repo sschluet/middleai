@@ -172,7 +172,7 @@ private struct VoiceFloatingRootView: View {
 }
 
 /// Concave shoulder geometry adapted from MIT-licensed DynamicNotchKit, the
-/// same notch component used by FluidVoice.
+/// same notch component used throughout MiddleAI.
 private struct FluidNotchShape: Shape {
   var topCornerRadius: CGFloat = 15
   var bottomCornerRadius: CGFloat = 20

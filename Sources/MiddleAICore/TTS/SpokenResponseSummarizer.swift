@@ -5,6 +5,12 @@ import Foundation
 #endif
 
 public actor SpokenResponseSummarizer {
+  private struct RankedSentence {
+    let index: Int
+    let text: String
+    let score: Double
+  }
+
   public init() {}
 
   public func spokenText(
@@ -23,17 +29,18 @@ public actor SpokenResponseSummarizer {
           model.supportsLocale(Locale(identifier: "de_DE"))
         {
           do {
+            let summaryInput = Self.boundedSummaryInput(clean)
             let session = LanguageModelSession(
               model: model,
               instructions: """
-                Du erstellst kurze deutsche Audio-Zusammenfassungen längerer Assistentenantworten. Nenne zuerst das Ergebnis oder die Kernaussage. Bewahre wichtige Zahlen, Bedingungen, Risiken und konkrete nächste Schritte. Verwende kurze, natürlich gesprochene Sätze ohne Markdown, Aufzählungszeichen, Quellenlisten oder Einleitung. Erfinde nichts. Maximal (maximumWords) Wörter.
+                Du erstellst kurze deutsche Audio-Zusammenfassungen längerer Assistentenantworten. Nenne zuerst das Ergebnis oder die Kernaussage. Bewahre wichtige Zahlen, Bedingungen, Risiken und konkrete nächste Schritte. Verwende kurze, natürlich gesprochene Sätze ohne Markdown, Aufzählungszeichen, Quellenlisten oder Einleitung. Erfinde nichts. Maximal \(maximumWords) Wörter.
                 """)
             let result = try await session.respond(
               to: """
                 Fasse diese Antwort für die Sprachausgabe zusammen:
 
                 <antwort>
-                (clean)
+                \(summaryInput)
                 </antwort>
                 """)
             let candidate = Self.plainText(result.content)
@@ -67,22 +74,56 @@ public actor SpokenResponseSummarizer {
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private nonisolated static func extractiveSummary(
+  public nonisolated static func extractiveSummary(
     _ text: String, maximumWords: Int
   ) -> String {
-    let sentences = text.split(whereSeparator: { ".!?".contains($0) })
-    var selected: [String] = []
-    var wordCount = 0
-    for sentence in sentences.prefix(6) {
+    let rawSentences = text.components(
+      separatedBy: try! NSRegularExpression(pattern: #"(?<=[.!?])\s+"#))
+    let sentences = rawSentences.enumerated().compactMap { index, sentence -> (Int, String)? in
       let clean = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-      let count = clean.split(whereSeparator: \Character.isWhitespace).count
-      guard !clean.isEmpty, wordCount + count <= maximumWords || selected.isEmpty else { break }
-      selected.append(clean)
-      wordCount += count
-      if selected.count >= 4 { break }
+      let words = clean.split(whereSeparator: \Character.isWhitespace)
+      guard words.count >= 5, words.count <= 55 else { return nil }
+      return (index, clean)
     }
-    let result = selected.joined(separator: ". ")
-    return result.isEmpty ? String(text.prefix(700)) : result + "."
+    let keywords = [
+      "ergebnis", "fazit", "zusammenfass", "empfehl", "entscheid", "wichtig", "kern",
+      "risik", "prognose", "ausblick", "insgesamt", "daher", "folgerung", "nächst",
+    ]
+    let ranked: [RankedSentence] = sentences.map { index, sentence in
+      let normalized = sentence.lowercased()
+      var score = index == 0 ? 2.0 : (index < 3 ? 1.0 : 0)
+      let keywordMatches = keywords.reduce(into: 0) { count, keyword in
+        if normalized.contains(keyword) { count += 1 }
+      }
+      score += Double(keywordMatches) * 1.8
+      if normalized.range(of: #"\d"#, options: .regularExpression) != nil { score += 0.5 }
+      if normalized.contains(":") { score += 0.25 }
+      return RankedSentence(index: index, text: sentence, score: score)
+    }
+    .sorted { lhs, rhs in
+      lhs.score == rhs.score ? lhs.index < rhs.index : lhs.score > rhs.score
+    }
+
+    var chosen: [(Int, String)] = []
+    var wordCount = 0
+    for sentence in ranked {
+      let count = sentence.text.split(whereSeparator: \Character.isWhitespace).count
+      guard wordCount + count <= maximumWords || chosen.isEmpty else { continue }
+      chosen.append((sentence.index, sentence.text))
+      wordCount += count
+      if chosen.count >= 4 { break }
+    }
+    let result = chosen.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: " ")
+    return result.isEmpty ? String(text.prefix(700)) : result
+  }
+
+  private nonisolated static func boundedSummaryInput(_ text: String) -> String {
+    let limit = 14_000
+    guard text.count > limit else { return text }
+    let prefix = text.prefix(9_000)
+    let suffix = text.suffix(5_000)
+    return
+      "\(prefix)\n\n[Der Mittelteil wurde für die lokale Zusammenfassung gekürzt.]\n\n\(suffix)"
   }
 
   private nonisolated static func replacing(
@@ -91,5 +132,20 @@ public actor SpokenResponseSummarizer {
     guard let expression = try? NSRegularExpression(pattern: pattern) else { return input }
     return expression.stringByReplacingMatches(
       in: input, range: NSRange(input.startIndex..., in: input), withTemplate: replacement)
+  }
+}
+
+extension String {
+  fileprivate func components(separatedBy expression: NSRegularExpression) -> [String] {
+    let range = NSRange(startIndex..., in: self)
+    var result: [String] = []
+    var start = startIndex
+    for match in expression.matches(in: self, range: range) {
+      guard let matchRange = Range(match.range, in: self) else { continue }
+      result.append(String(self[start..<matchRange.lowerBound]))
+      start = matchRange.upperBound
+    }
+    result.append(String(self[start...]))
+    return result
   }
 }

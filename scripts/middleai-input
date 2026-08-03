@@ -26,6 +26,6 @@ fi
 /usr/bin/curl --fail-with-body --silent --show-error \
   "${auth_args[@]}" \
   -H 'Content-Type: text/plain; charset=utf-8' \
-  -H 'X-MiddleAI-Source: fluidvoice' \
+  -H 'X-MiddleAI-Source: middleai-script' \
   --data-binary "$INPUT_TEXT" "$MIDDLEAI_API_URL"
 echo

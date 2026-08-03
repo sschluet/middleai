@@ -11,6 +11,29 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertEqual(parsed.privacy.localCacheRetentionDays, 365)
   }
 
+  func testSTTSettingsRoundTrip() throws {
+    var config = AppConfig()
+    config.stt.language = "auto"
+    config.stt.encoderPrecision = "int4"
+    config.stt.computeMode = "fast"
+    config.stt.longFormMode = "fast"
+    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    XCTAssertEqual(parsed.stt, config.stt)
+  }
+
+  func testResearchFallbackSelectsConclusionsAndNextSteps() {
+    let response =
+      "Die Recherche umfasst fünf Märkte und zahlreiche Quellen. "
+      + "Der erste Markt wächst moderat. Mehrere Anbieter investieren in Automatisierung. "
+      + "Ein Risiko bleibt die Regulierung. "
+      + "Das wichtigste Ergebnis: Der deutsche Markt dürfte bis 2028 um 18 Prozent wachsen. "
+      + "Als nächster Schritt empfiehlt sich ein Pilotprojekt mit klarer Erfolgsmessung."
+    let summary = SpokenResponseSummarizer.extractiveSummary(response, maximumWords: 70)
+    XCTAssertTrue(summary.contains("wichtigste Ergebnis"))
+    XCTAssertTrue(summary.contains("nächster Schritt"))
+    XCTAssertGreaterThan(summary.components(separatedBy: ".").count, 2)
+  }
+
   func testConversationCacheCanBeInspectedPurgedAndCleared() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-tests-\(UUID().uuidString)", isDirectory: true)

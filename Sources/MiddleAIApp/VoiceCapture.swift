@@ -1,6 +1,8 @@
 import AVFoundation
+import CoreML
 import FluidAudio
 import Foundation
+import MiddleAICore
 
 struct CapturedAudio: @unchecked Sendable {
   let samples: [Float]
@@ -108,33 +110,51 @@ final class MicrophoneRecorder: @unchecked Sendable {
 actor ParakeetTranscriber {
   private var manager: AsrManager?
   private var loadingTask: Task<AsrManager, Error>?
+  private var activeSettings: AppConfig.STT?
 
-  func prepare() async throws {
-    _ = try await loadManager()
+  func prepare(settings: AppConfig.STT) async throws {
+    _ = try await loadManager(settings: settings)
   }
 
-  func transcribe(_ audio: CapturedAudio) async throws -> String {
+  func transcribe(_ audio: CapturedAudio, settings: AppConfig.STT) async throws -> String {
     guard audio.duration >= 0.25, audio.samples.count >= 1_600 else {
       throw VoiceCaptureError.recordingTooShort
     }
-    let manager = try await loadManager()
+    let manager = try await loadManager(settings: settings)
     let samples = try AudioConverter().resample(audio.samples, from: audio.sampleRate)
     guard samples.count >= 1_600 else { throw VoiceCaptureError.recordingTooShort }
     let layers = await manager.decoderLayerCount
     var decoderState = try TdtDecoderState(decoderLayers: layers)
+    let language: Language? = settings.language == "de" ? .german : nil
     let result = try await manager.transcribe(
-      samples, decoderState: &decoderState, language: .german)
+      samples, decoderState: &decoderState, language: language)
     let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { throw VoiceCaptureError.emptyTranscription }
     return text
   }
 
-  private func loadManager() async throws -> AsrManager {
+  private func loadManager(settings: AppConfig.STT) async throws -> AsrManager {
+    if activeSettings != settings {
+      loadingTask?.cancel()
+      loadingTask = nil
+      if let manager { await manager.cleanup() }
+      manager = nil
+      activeSettings = settings
+    }
     if let manager { return manager }
     if let loadingTask { return try await loadingTask.value }
+    let selectedSettings = settings
     let task = Task.detached(priority: .userInitiated) {
-      let models = try await AsrModels.downloadAndLoad(version: .v3)
-      return AsrManager(config: .default, models: models)
+      let precision: ParakeetEncoderPrecision =
+        selectedSettings.encoderPrecision == "int4" ? .int4 : .int8
+      let computeUnits: MLComputeUnits? =
+        selectedSettings.computeMode == "fast" ? .cpuAndGPU : nil
+      let accurateLongForm = selectedSettings.longFormMode == "accurate"
+      let asrConfig = ASRConfig(
+        melChunkContext: false, dualDecodeArbitration: accurateLongForm)
+      let models = try await AsrModels.downloadAndLoad(
+        version: .v3, encoderPrecision: precision, encoderComputeUnits: computeUnits)
+      return AsrManager(config: asrConfig, models: models)
     }
     loadingTask = task
     do {

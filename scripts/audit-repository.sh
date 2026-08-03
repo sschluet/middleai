@@ -32,6 +32,11 @@ if git grep -I -n -E -- \
   exit 1
 fi
 
+if git grep -I -n -i -E -- 'fluid[[:space:]]?voice' -- ':!scripts/audit-repository.sh'; then
+  print -u2 'Obsolete product-comparison references must not be committed.'
+  exit 1
+fi
+
 grep -q -- '--hash=sha256:' Sources/MiddleAICore/Resources/tts-runtime-requirements.txt || {
   print -u2 'TTS Python dependencies must be locked with SHA-256 hashes.'
   exit 1

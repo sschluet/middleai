@@ -27,7 +27,7 @@ struct DictationTarget {
   func insert(
     _ text: String, into target: DictationTarget, smartFormatting: Bool,
     formattingApplicationIDs: [String]
-  ) throws -> FormattedDictation {
+  ) async throws -> FormattedDictation {
     guard AXIsProcessTrusted() else {
       throw VoiceInputError.accessibilityPermissionMissing
     }
@@ -39,14 +39,6 @@ struct DictationTarget {
       smartFormatting && formattingEnabledForTarget
       ? DictationFormatter.format(text)
       : FormattedDictation(plainText: text, html: "", didApplyFormatting: false)
-
-    // Most native text fields expose the selected-text accessibility attribute. Prefer that
-    // route for plain text because it neither touches the user's clipboard nor depends on a
-    // timing-sensitive synthetic paste. Rich text still uses the pasteboard so Word, Outlook
-    // and similar editors can retain lists and paragraphs.
-    if !formatted.didApplyFormatting, insertUsingAccessibility(formatted.plainText) {
-      return formatted
-    }
 
     let pasteboard = NSPasteboard.general
     let saved = saveClipboard(pasteboard)
@@ -61,45 +53,37 @@ struct DictationTarget {
     }
     guard pasteboard.writeObjects([item]) else { throw VoiceInputError.couldNotInsertText }
     let transcriptChangeCount = pasteboard.changeCount
-    target.application?.activate()
-
     let profile = InsertionProfile(bundleIdentifier: target.bundleIdentifier)
-    DispatchQueue.main.asyncAfter(deadline: .now() + profile.activationDelay) {
-      let source = CGEventSource(stateID: .combinedSessionState)
-      let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-      let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-      down?.flags = .maskCommand
-      up?.flags = .maskCommand
-      down?.post(tap: .cghidEventTap)
-      up?.post(tap: .cghidEventTap)
+    do {
+      if let application = target.application {
+        guard !application.isTerminated else { throw VoiceInputError.targetApplicationUnavailable }
+        application.activate()
+        for _ in 0..<12 where !application.isActive {
+          try await Task.sleep(for: .milliseconds(50))
+        }
+        guard application.isActive else { throw VoiceInputError.targetApplicationUnavailable }
+      }
+      try await Task.sleep(for: .seconds(profile.activationDelay))
+      guard postPasteShortcut() else { throw VoiceInputError.couldNotInsertText }
+      try await Task.sleep(for: .seconds(profile.pasteCompletionDelay))
+    } catch {
+      if pasteboard.changeCount == transcriptChangeCount { restoreClipboard(saved, to: pasteboard) }
+      throw error
     }
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + profile.clipboardRestoreDelay) {
-      guard pasteboard.changeCount == transcriptChangeCount else { return }
-      self.restoreClipboard(saved, to: pasteboard)
-    }
+    if pasteboard.changeCount == transcriptChangeCount { restoreClipboard(saved, to: pasteboard) }
     return formatted
   }
 
-  private func insertUsingAccessibility(_ text: String) -> Bool {
-    let system = AXUIElementCreateSystemWide()
-    var focusedValue: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        system, kAXFocusedUIElementAttribute as CFString, &focusedValue) == .success,
-      let focusedValue,
-      CFGetTypeID(focusedValue) == AXUIElementGetTypeID()
+  private func postPasteShortcut() -> Bool {
+    guard let source = CGEventSource(stateID: .combinedSessionState),
+      let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
     else { return false }
-
-    let focused = unsafeDowncast(focusedValue, to: AXUIElement.self)
-    var settable = DarwinBoolean(false)
-    guard
-      AXUIElementIsAttributeSettable(
-        focused, kAXSelectedTextAttribute as CFString, &settable) == .success,
-      settable.boolValue
-    else { return false }
-    return AXUIElementSetAttributeValue(
-      focused, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+    down.flags = .maskCommand
+    up.flags = .maskCommand
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+    return true
   }
 
   private func rtfData(from html: String) -> Data? {
@@ -138,19 +122,19 @@ struct DictationTarget {
 
   private struct InsertionProfile {
     let activationDelay: TimeInterval
-    let clipboardRestoreDelay: TimeInterval
+    let pasteCompletionDelay: TimeInterval
 
     init(bundleIdentifier: String?) {
       switch bundleIdentifier?.lowercased() {
       case "com.microsoft.word", "com.microsoft.powerpoint", "com.microsoft.outlook":
-        activationDelay = 0.12
-        clipboardRestoreDelay = 1.5
+        activationDelay = 0.18
+        pasteCompletionDelay = 0.65
       case "ch.protonmail.desktop":
-        activationDelay = 0.1
-        clipboardRestoreDelay = 1.0
+        activationDelay = 0.15
+        pasteCompletionDelay = 0.45
       default:
-        activationDelay = 0.08
-        clipboardRestoreDelay = 0.8
+        activationDelay = 0.12
+        pasteCompletionDelay = 0.35
       }
     }
   }
@@ -160,6 +144,7 @@ enum VoiceInputError: LocalizedError {
   case accessibilityPermissionMissing
   case inputMonitoringPermissionMissing
   case couldNotInsertText
+  case targetApplicationUnavailable
   case assistantNotConfigured
   case recordingCancelled
 
@@ -170,6 +155,8 @@ enum VoiceInputError: LocalizedError {
     case .inputMonitoringPermissionMissing:
       return "Bitte MiddleAI unter Datenschutz & Sicherheit > Eingabeüberwachung erlauben."
     case .couldNotInsertText: return "Der erkannte Text konnte nicht eingefügt werden."
+    case .targetApplicationUnavailable:
+      return "Die Zielanwendung ist nicht mehr aktiv. Bitte das Textfeld erneut auswählen."
     case .assistantNotConfigured: return "OpenWebUI ist in MiddleAI noch nicht eingerichtet."
     case .recordingCancelled: return "Diktat abgebrochen."
     }

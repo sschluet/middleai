@@ -366,6 +366,67 @@ struct SettingsView: View {
   private var voicePane: some View {
     VStack(spacing: 16) {
       SettingsCard(
+        title: "Lokale Spracherkennung",
+        subtitle: "Parakeet TDT v3 · Sprache zu Text · vollständig auf diesem Mac",
+        symbol: "waveform.badge.mic"
+      ) {
+        HStack(alignment: .top, spacing: 12) {
+          Image(systemName: "cpu")
+            .font(.title2)
+            .foregroundStyle(Color.accentColor)
+            .frame(width: 30)
+          VStack(alignment: .leading, spacing: 4) {
+            Text("NVIDIA Parakeet TDT 0.6B v3").font(.callout.weight(.semibold))
+            Text(
+              "Mehrsprachiges Modell mit rund 600 Millionen Parametern. FluidAudio lädt die Core-ML-Variante einmalig und führt Encoder und Decoder anschließend lokal aus. Audio wird auf 16 kHz normalisiert und nicht gespeichert."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+          }
+        }
+        Divider()
+        Picker("Sprachmodus", selection: $state.config.stt.language) {
+          Text("Deutsch · empfohlen").tag("de")
+          Text("Mehrsprachig · automatisch").tag("auto")
+        }
+        .pickerStyle(.menu)
+        Text(
+          state.config.stt.language == "de"
+            ? "Der Deutschmodus verwirft Zeichen aus unpassenden Schriftsystemen und reduziert dadurch fremdsprachige Ausreißer. Fachbegriffe und englische Wörter in lateinischer Schrift bleiben möglich."
+            : "Automatisch lässt die mehrsprachige Decodierung ungefiltert. Das ist sinnvoll, wenn du regelmäßig zwischen unterschiedlichen Schriftsystemen wechselst."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Picker("Encoder", selection: $state.config.stt.encoderPrecision) {
+          Text("Int8 · beste Erkennung").tag("int8")
+          Text("Int4 · kompakter").tag("int4")
+        }
+        .pickerStyle(.segmented)
+        Text(
+          "Int8 ist die empfohlene Qualitätsstufe. Int4 benötigt weniger Speicher und kann beim ersten Wechsel einen zusätzlichen Encoder-Download auslösen."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Picker("Beschleunigung", selection: $state.config.stt.computeMode) {
+          Text("Neural Engine · effizient").tag("efficient")
+          Text("GPU · schneller").tag("fast")
+        }
+        .pickerStyle(.segmented)
+        Picker("Lange Diktate", selection: $state.config.stt.longFormMode) {
+          Text("Genauer · empfohlen").tag("accurate")
+          Text("Schneller").tag("fast")
+        }
+        .pickerStyle(.segmented)
+        Text(
+          "Die Einstellung für lange Diktate wirkt vor allem ab ungefähr 30 Sekunden. „Genauer“ vergleicht bei schwierigen Übergängen mehrere lokale Decodierungswege."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        HStack {
+          Button("STT-Einstellungen anwenden") { state.applySTTSettings() }
+            .buttonStyle(.borderedProminent)
+          Spacer()
+          Text(state.sttStatus).font(.caption).foregroundStyle(.secondary)
+        }
+      }
+
+      SettingsCard(
         title: "Aktivierungstasten", subtitle: "Lege für jeden Sprachmodus eine eigene Taste fest",
         symbol: "keyboard"
       ) {

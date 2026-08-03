@@ -32,6 +32,18 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var temperature: Float = 0.65
     public var localCommand = ""
   }
+  public struct STT: Codable, Equatable, Sendable {
+    /// Parakeet TDT v3 is the multilingual model supported by MiddleAI.
+    public var model = "parakeet_tdt_v3"
+    /// `de` enables the Latin-script safety filter; `auto` leaves multilingual decoding open.
+    public var language = "de"
+    /// The encoder can be downloaded in int8 or the smaller int4 representation.
+    public var encoderPrecision = "int8"
+    /// `efficient` favors the Neural Engine; `fast` uses the GPU for the encoder.
+    public var computeMode = "efficient"
+    /// Improves multilingual recordings longer than roughly 30 seconds at extra compute cost.
+    public var longFormMode = "accurate"
+  }
   public struct Dictation: Codable, Equatable, Sendable {
     public static let defaultFormattingApplications = [
       "com.microsoft.Word",
@@ -75,6 +87,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public var routing = Routing()
   public var localLLM = LocalLLM()
   public var tts = TTS()
+  public var stt = STT()
   public var dictation = Dictation()
   public var hotkeys = Hotkeys()
   public var api = API()
@@ -253,6 +266,11 @@ public enum ConfigLoader {
       case ("tts", "temperature"):
         c.tts.temperature = Float(try legacyDouble(value, line: index))
       case ("tts", "local_command"): c.tts.localCommand = value
+      case ("stt", "model"): c.stt.model = value
+      case ("stt", "language"): c.stt.language = value
+      case ("stt", "encoder_precision"): c.stt.encoderPrecision = value
+      case ("stt", "compute_mode"): c.stt.computeMode = value
+      case ("stt", "long_form_mode"): c.stt.longFormMode = value
       case ("dictation", "polish_with_local_ai"):
         c.dictation.polishWithLocalAI = try legacyBool(value, line: index)
       case ("dictation", "smart_formatting"):
@@ -332,6 +350,14 @@ public enum ConfigLoader {
     }
     guard c.tts.rate.isFinite, c.tts.rate > 0, c.tts.temperature.isFinite else {
       throw MiddleAIError.configuration("TTS numeric settings are invalid")
+    }
+    guard c.stt.model == "parakeet_tdt_v3",
+      ["de", "auto"].contains(c.stt.language),
+      ["int8", "int4"].contains(c.stt.encoderPrecision),
+      ["efficient", "fast"].contains(c.stt.computeMode),
+      ["accurate", "fast"].contains(c.stt.longFormMode)
+    else {
+      throw MiddleAIError.configuration("STT settings are invalid")
     }
     guard (0...3_650).contains(c.privacy.localCacheRetentionDays) else {
       throw MiddleAIError.configuration(

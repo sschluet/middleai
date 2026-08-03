@@ -43,6 +43,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var isWorking = false
   @Published var needsSetup = false
   @Published var voiceStatus = "Voice wird gestartet"
+  @Published var sttStatus = "Parakeet TDT v3 wird lokal verwendet"
   @Published var ttsStatus = "Sprachausgabe wird gestartet"
   @Published var ttsModelStatuses: [TTSModelDownloadStatus] = TTSModelLibrary.scan(
     activeModelID: nil, confirmed: [], failures: [:])
@@ -405,6 +406,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         ? "Formatierungsbefehle für die ausgewählte App aktiviert"
         : "Formatierungsbefehle für die ausgewählte App deaktiviert"
     } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func applySTTSettings() {
+    do {
+      try ConfigLoader.save(config)
+      sttStatus = "Einstellungen gespeichert. Das lokale STT-Modell wird neu geladen."
+      voiceController?.reloadSTTSettings()
+    } catch {
+      sttStatus = "STT-Einstellungen konnten nicht gespeichert werden"
       lastError = error.localizedDescription
     }
   }

@@ -62,7 +62,7 @@ import OSLog
     Task { [weak self] in
       guard let self else { return }
       do {
-        try await self.transcriber.prepare()
+        try await self.transcriber.prepare(settings: self.configProvider().stt)
         await MainActor.run { self.onStatus(self.readyStatus) }
       } catch {
         await MainActor.run { self.onStatus("Sprachmodell wird beim ersten Diktat geladen") }
@@ -73,6 +73,19 @@ import OSLog
   func reloadActivationKeys() {
     keyMonitor.start()
     onStatus(readyStatus)
+  }
+
+  func reloadSTTSettings() {
+    onStatus("STT-Modell wird mit den neuen Einstellungen geladen")
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.transcriber.prepare(settings: self.configProvider().stt)
+        await MainActor.run { self.onStatus(self.readyStatus) }
+      } catch {
+        await MainActor.run { self.fail(error) }
+      }
+    }
   }
 
   private var activationKeys: (dictation: ActivationKeyChoice, assistant: ActivationKeyChoice) {
@@ -185,7 +198,8 @@ import OSLog
     processingTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let text = try await self.transcriber.transcribe(audio)
+        let text = try await self.transcriber.transcribe(
+          audio, settings: self.configProvider().stt)
         try Task.checkCancellation()
         guard Self.isMeaningfulTranscript(text) else {
           await MainActor.run { self.dismissSilently() }
@@ -205,7 +219,7 @@ import OSLog
           }
           let finalText = await self.polisher.polish(text, enabled: polishingEnabled)
           try Task.checkCancellation()
-          await MainActor.run { self.finishDictation(finalText, target: target) }
+          await self.finishDictation(finalText, target: target)
         } else {
           await MainActor.run { self.runAssistant(text) }
         }
@@ -224,11 +238,11 @@ import OSLog
     }
   }
 
-  private func finishDictation(_ text: String, target: DictationTarget?) {
+  private func finishDictation(_ text: String, target: DictationTarget?) async {
     do {
       let destination = target ?? insertion.captureTarget()
       let dictationConfig = configProvider().dictation
-      let inserted = try insertion.insert(
+      let inserted = try await insertion.insert(
         text, into: destination, smartFormatting: dictationConfig.smartFormatting,
         formattingApplicationIDs: dictationConfig.formattingApplications)
       overlay.update(phase: .result, detail: inserted.plainText)

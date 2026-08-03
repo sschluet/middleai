@@ -36,8 +36,8 @@ CC BY 4.0. Model files are not stored in this repository or bundled in
 ## DynamicNotchKit
 
 MiddleAI adapts the notch shape and window geometry from DynamicNotchKit at
-<https://github.com/altic-dev/DynamicNotchKit>, based on the FluidVoice
-integration. DynamicNotchKit is licensed under the MIT License.
+<https://github.com/altic-dev/DynamicNotchKit>. DynamicNotchKit is licensed
+under the MIT License.
 
 Copyright (c) 2025 Kai Azim
 

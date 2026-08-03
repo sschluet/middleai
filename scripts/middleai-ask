@@ -28,6 +28,6 @@ fi
   --connect-timeout 2 \
   --max-time 5 \
   -H 'Content-Type: text/plain; charset=utf-8' \
-  -H 'X-MiddleAI-Source: fluidvoice-command' \
+  -H 'X-MiddleAI-Source: middleai-command' \
   --data-binary "$INPUT_TEXT" "$MIDDLEAI_COMMAND_URL"
 echo

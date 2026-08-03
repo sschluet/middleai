@@ -17,7 +17,7 @@ Right Option / CLI / synchronous HTTP / Quick Input
 The native Voice path starts before the engine:
 
 ```text
-left Option  -> AVAudioEngine -> Parakeet TDT v3 -> conservative local cleanup -> restore target app -> paste text
+left Option  -> AVAudioEngine -> configurable Parakeet TDT v3 -> conservative local cleanup -> restore target app -> focus-safe paste sequence
 right Option -> AVAudioEngine -> Parakeet TDT v3 -> MiddleAIEngine -> OpenWebUI -> local TTS
 ```
 
@@ -30,6 +30,11 @@ dictation target or take keyboard focus.
 The island adapts to the physical MacBook notch and starts at the top safe-area boundary. On an
 external display without a camera notch it becomes a compact floating capsule. Recording and
 processing use the same focus-free status surface.
+
+The STT configuration retains the multilingual Parakeet TDT v3 model while allowing an int8 or
+int4 encoder, Neural Engine or GPU execution, German-script filtering or open multilingual
+decoding, and an additional long-form arbitration pass. Changing these settings invalidates the
+in-memory ASR manager and reloads the matching Core ML assets before the next recording.
 
 `MiddleAICore` is shared by the `MiddleAI` SwiftUI app, `middleai` CLI and test runner. Input adapters know only the engine. Open-WebUI routes, headers and response formats exist only in `OpenWebUIClient`.
 

@@ -9,7 +9,7 @@
 
 MiddleAI is a local-first macOS voice layer for dictation and an existing private Open WebUI instance. It recognizes speech locally, selects the appropriate conversation automatically, keeps the canonical chat in Open WebUI, streams the answer and speaks complete sentences locally on the Mac.
 
-MiddleAI replaces FluidVoice for this workflow. Tap the left Option key to start dictation and tap it again to finish, or hold it for push-to-talk. The right Option key works the same way for spoken requests to OpenWebUI. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
+Tap the left Option key to start dictation and tap it again to finish, or hold it for push-to-talk. The right Option key works the same way for spoken requests to OpenWebUI. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
 
 ## Download
 
@@ -24,11 +24,11 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 - Native SwiftUI menu-bar app with first-run settings, quick input, status, profiles and current-chat link
 - Native push-to-talk handling for the separate left and right Option keys
 - Local Parakeet TDT v3 multilingual speech recognition through FluidAudio and Core ML
-- FluidVoice-inspired 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
+- Native 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
 - Silent dismissal for accidental, too-short or empty Option-key recordings
 - Optional on-device dictation polishing with Apple Intelligence to remove filler words, repetitions and slips before insertion
 - Conservative spoken formatting commands for configurable target applications, including paragraphs, line breaks, German quotation marks, punctuation and rich lists
-- Accessibility-based plain-text insertion with an app-tuned, clipboard-preserving rich-text fallback
+- Focus-restoring, clipboard-preserving text insertion with app-tuned timing for plain and rich text
 - Shared Swift core plus `middleai` CLI
 - Loopback-only synchronous `POST /input` plus queued `POST /command` for optional local integrations
 - SQLite conversation/message cache and profile state
@@ -121,6 +121,8 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 
 The Voice settings contain **Diktat vor dem Einfügen lokal glätten**. On macOS 26, this uses Apple's on-device Foundation Model with German locale support. MiddleAI accepts a generated correction only when numbers and protected terms remain present, the vocabulary stays close to the transcript and no substantial new wording is introduced. Otherwise it keeps a conservative local cleanup that only removes filler sounds and direct repetitions. Dictation text is never sent to OpenWebUI or another cloud service for polishing.
 
+Settings → Spracheingabe documents the active STT stack and exposes the useful Parakeet TDT v3 controls. German mode keeps the decoder in a compatible Latin script, while multilingual mode removes that restriction. The int8 encoder is the recommended accuracy setting; int4 uses less storage. Neural Engine mode favors energy efficiency and GPU mode favors throughput. For recordings longer than roughly 30 seconds, accurate long-form mode locally compares additional decoding paths at the cost of some processing time.
+
 ### Spoken formatting in selected apps
 
 MiddleAI can translate explicit German structure commands into formatted output. Microsoft Word (`com.microsoft.Word`), Microsoft PowerPoint (`com.microsoft.Powerpoint`), Microsoft Outlook (`com.microsoft.Outlook`) and Proton Mail (`ch.protonmail.desktop`) are enabled by default. Under Settings → Spracheingabe, each default can be disabled and additional installed `.app` bundles can be selected. MiddleAI stores only their bundle identifiers.
@@ -133,7 +135,7 @@ MiddleAI can translate explicit German structure commands into formatted output.
 - Starting with `nummerierte Liste` creates an ordered list.
 - Spoken `Komma`, `Doppelpunkt`, `Semikolon`, `Fragezeichen`, `Ausrufezeichen` and `Satzende` are converted conservatively.
 
-For plain text MiddleAI first writes directly into the focused accessibility element, leaving the clipboard untouched. Rich output uses app-specific timing and places plain text, HTML and RTF representations on the clipboard so Word, PowerPoint, Outlook and Proton Mail can preserve lists and paragraphs. The previous clipboard contents are restored afterwards. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
+MiddleAI restores the application that was active when recording started, waits until it is focused, then pastes the transcript with app-specific timing. Rich output places plain text, HTML and RTF representations on the pasteboard so Word, PowerPoint, Outlook and Proton Mail can preserve lists and paragraphs. The previous clipboard contents are restored only after the paste has completed. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
 
 The password is written to Keychain service `de.middleai.openwebui`, never to YAML. For development only, `MIDDLEAI_OPENWEBUI_PASSWORD` may be set from a gitignored `.env`-style shell environment.
 
@@ -164,7 +166,7 @@ dist/bin/middleai serve
 curl http://127.0.0.1:8765/input \
   -H "Authorization: Bearer $(dist/bin/middleai api-token)" \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Und wie sieht es mit Gardena aus?","source":"fluidvoice"}'
+  -d '{"text":"Und wie sieht es mit Gardena aus?","source":"local-integration"}'
 ```
 
 The server refuses configuration on `0.0.0.0`. New installations require a random local bearer token by default. It is stored separately from OpenWebUI credentials under the Keychain account `local_http_token`. Existing configurations keep their explicit setting; `middleai api-secure` enables authentication and prints the token. The bundled `middleai-input` and `middleai-ask` scripts read that token from Keychain automatically.
@@ -185,6 +187,8 @@ The local router only returns a routing decision; it is never asked to answer th
 
 `macos` remains a completely local fallback. MiddleAI lists the installed German Apple voices with gender and quality information. Additional Apple voices can be opened for download from the Speech settings. `local_model` remains available for an optional custom executable. New user input interrupts playback and clears pending speech immediately.
 
+In `smart_summary` mode MiddleAI waits for the complete OpenWebUI response and then asks Apple Intelligence for a short grounded German spoken summary. The prompt contains the actual response text and preserves conclusions, important figures, risks and next steps. If Apple Intelligence is unavailable or rejects the request, a deterministic local fallback ranks relevant conclusion and recommendation sentences across the response instead of reading only its opening paragraph.
+
 STT microphone audio remains in memory and is never sent to OpenWebUI. Only the finished assistant-mode transcript is sent to the configured OpenWebUI instance. Dictation-mode transcripts never leave the Mac.
 
 ## Tests and diagnostics
@@ -198,7 +202,7 @@ The portable test runner covers configuration migration and permissions, HTTP pa
 
 Settings → Diagnose checks permissions, configuration rights, disk space, local API protection, the selected OpenWebUI model and connection. Its support report deliberately omits credentials, prompts and responses and redacts server URLs. Settings → Hilfe can inspect and delete the local routing cache without deleting canonical conversations in OpenWebUI. The cache defaults to a 90-day retention period; 30 days, one year or permanent local retention can be selected there.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [DEVELOPMENT.md](DEVELOPMENT.md) and [FLUIDVOICE.md](FLUIDVOICE.md) for migration notes.
+See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md) and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation and maintenance details.
 
 ## License
 

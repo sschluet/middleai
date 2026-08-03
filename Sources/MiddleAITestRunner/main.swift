@@ -73,6 +73,9 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.hotkeys.dictation = "left_control"
     c.hotkeys.assistant = "right_command"
     c.tts.localCommand = "/tmp/model #1/\"voice\""
+    c.stt.encoderPrecision = "int4"
+    c.stt.computeMode = "fast"
+    c.stt.language = "auto"
     c.privacy.localCacheRetentionDays = 365
     let rendered = ConfigLoader.renderYAML(c)
     let parsed = try ConfigLoader.parseYAML(rendered)
@@ -109,6 +112,10 @@ struct FixedRouter: ConversationRoutingStrategy {
       parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command",
       "activation keys round-trip")
     try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
+    try expect(
+      parsed.stt.encoderPrecision == "int4" && parsed.stt.computeMode == "fast"
+        && parsed.stt.language == "auto",
+      "STT settings round-trip")
     try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
     try expect(AppConfig().api.tokenRequired, "secure API default")
     try expect(
@@ -320,6 +327,17 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(
       SpokenResponseSummarizer.plainText("## Ergebnis\n- **Wichtig**") == "Ergebnis. Wichtig",
       "spoken Markdown cleanup")
+    let researchSummary = SpokenResponseSummarizer.extractiveSummary(
+      "Die Recherche umfasst fünf Märkte und zahlreiche Quellen. Der erste Markt wächst moderat. "
+        + "Mehrere Anbieter investieren in Automatisierung. Ein Risiko bleibt die Regulierung. "
+        + "Das wichtigste Ergebnis: Der deutsche Markt dürfte bis 2028 um 18 Prozent wachsen. "
+        + "Als nächster Schritt empfiehlt sich ein Pilotprojekt mit klarer Erfolgsmessung.",
+      maximumWords: 70)
+    try expect(
+      researchSummary.contains("wichtigste Ergebnis")
+        && researchSummary.contains("nächster Schritt")
+        && researchSummary.components(separatedBy: ".").count > 2,
+      "research response is summarized beyond its first paragraph: \(researchSummary)")
     try expect(
       MiddleAIEngine.remoteScope("HTTPS://AI.EXAMPLE/") == "https://ai.example",
       "remote server scope normalization")
