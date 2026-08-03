@@ -2,48 +2,6 @@ import AppKit
 import MiddleAICore
 import SwiftUI
 
-struct MenuContent: View {
-  @ObservedObject var state: AppState
-  var body: some View {
-    Text("Status: \(state.status)")
-    Text(state.voiceStatus).font(.caption)
-    Text(state.ttsStatus).font(.caption)
-    Text("Current Conversation:")
-    Text(state.currentTitle).font(.caption)
-    Divider()
-    Menu(
-      "Profile: \(state.engine?.activeProfile.capitalized ?? state.config.activeProfile.capitalized)"
-    ) {
-      ForEach(["default", "management", "architecture", "coding", "research"], id: \.self) {
-        profile in
-        Button(profile.capitalized) {
-          state.submit(
-            profile == "architecture"
-              ? "Architekturmodus"
-              : profile == "coding"
-                ? "Codingmodus"
-                : profile == "management"
-                  ? "Managementmodus" : profile == "research" ? "Recherchemodus" : "Standardmodus")
-        }
-      }
-    }
-    Divider()
-    Button("Quick Input…") { state.showQuickInput() }
-    Button("Setup / Settings…") { state.showSetupWindow() }
-    Button("Hilfe & Systemanforderungen…") { state.showHelpWindow() }
-    Button("New Conversation") { state.newConversation() }
-    Button("Stop Speaking") { state.stopSpeaking() }
-    Button("Anbieter-Seite öffnen") { state.openCurrentChat() }.disabled(
-      state.engine?.manager.currentConversation?.openWebUIChatID == nil)
-    Divider()
-    SettingsLink { Text("Settings") }
-    Button("Diagnostics") { state.submit("Welcher Chat ist gerade aktiv?") }
-    if !state.lastError.isEmpty { Text(state.lastError).font(.caption).foregroundStyle(.red) }
-    Divider()
-    Button("Quit MiddleAI") { NSApplication.shared.terminate(nil) }
-  }
-}
-
 struct QuickInputView: View {
   @ObservedObject var state: AppState
   @FocusState private var focused: Bool

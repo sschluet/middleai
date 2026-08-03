@@ -47,10 +47,6 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var state = AppState()
   var body: some Scene {
-    MenuBarExtra("MiddleAI", systemImage: "waveform") {
-      MenuContent(state: state)
-    }
-    .menuBarExtraStyle(.menu)
     Settings { SettingsView(state: state).frame(minWidth: 860, minHeight: 660) }
   }
 }
@@ -95,6 +91,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   private var confirmedTTSModels = Set<String>()
   private var ttsModelFailures: [String: String] = [:]
   private var reopenObserver: NSObjectProtocol?
+  private var menuBarController: MenuBarController?
   private var builtAssistantProvider = ""
   init() {
     reopenObserver = NotificationCenter.default.addObserver(
@@ -136,6 +133,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     }
     configureVoice()
     refreshTTSModelStatuses()
+    menuBarController = MenuBarController(state: self)
     Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: 350_000_000)
       if self?.needsSetup == true { self?.showSetupWindow() }
@@ -270,6 +268,11 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     } catch {
       lastError = error.localizedDescription
     }
+  }
+
+  func startNewConversation() {
+    newConversation()
+    showQuickInput()
   }
   func refreshConversations() {
     do {
