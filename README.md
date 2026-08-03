@@ -23,7 +23,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 
 ## What is included
 
-- Native SwiftUI menu-bar app with first-run settings, quick input, status, profiles and current-chat link
+- Native SwiftUI menu-bar app with first-run settings, a searchable MiddleAI conversation window, status, profiles and current-chat link
 - Native push-to-talk handling for the separate left and right Option keys
 - Local Parakeet TDT v3 multilingual speech recognition through FluidAudio and Core ML
 - Native 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
@@ -33,7 +33,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 - Focus-restoring, clipboard-preserving text insertion with app-tuned timing for plain and rich text
 - Shared Swift core plus `middleai` CLI
 - Loopback-only synchronous `POST /input` plus queued `POST /command` for optional local integrations
-- SQLite conversation/message cache and profile state
+- SQLite conversation/message cache plus persistent, editable profile system prompts
 - `HeuristicRouter`, `EmbeddingRouter`, `LLMRouter` and default `HybridRouter`
 - Password and API-key auth providers; passwords/tokens live in macOS Keychain
 - Selectable answer provider: OpenWebUI, OpenAI Platform or OpenRouter
@@ -190,6 +190,10 @@ The server refuses configuration on `0.0.0.0`. New installations require a rando
 Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and can optionally ask a local `/v1/chat/completions` routing model. If that model is unavailable, the heuristic path remains operational.
 
 The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
+
+## Profiles
+
+The Standard, Management, Architecture, Coding and Research profiles can each carry an editable system prompt. Profiles are configured in Settings, saved in `~/.middleai/config.yaml` and injected as the first system message for requests to the selected answer provider. The active profile can be changed from Settings, the menu-bar menu or a local spoken command. Profile prompts affect assistant answers only; STT, dictation polishing and TTS remain local and unchanged.
 
 ## TTS and privacy
 

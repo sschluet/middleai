@@ -82,6 +82,8 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.stt.language = "auto"
     c.stt.inputDeviceUID = "test-input-device"
     c.privacy.localCacheRetentionDays = 365
+    c.activeProfile = "coding"
+    c.profiles.systemPrompts["coding"] = "Antworte mit wartbarem Swift-Code."
     let rendered = ConfigLoader.renderYAML(c)
     let parsed = try ConfigLoader.parseYAML(rendered)
     try expect(rendered.contains("\"schema_version\" : 1"), "configuration schema version")
@@ -127,6 +129,10 @@ struct FixedRouter: ConversationRoutingStrategy {
         && parsed.stt.language == "auto" && parsed.stt.inputDeviceUID == "test-input-device",
       "STT settings round-trip")
     try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
+    try expect(parsed.activeProfile == "coding", "active profile persistence")
+    try expect(
+      parsed.profileSystemPrompt(for: "coding") == "Antworte mit wartbarem Swift-Code.",
+      "profile prompt persistence")
     try expect(AppConfig().api.tokenRequired, "secure API default")
     try expect(
       TTSVoiceCatalog.supertonicVoices.count == 5
@@ -486,8 +492,11 @@ struct FixedRouter: ConversationRoutingStrategy {
         result: RoutingDecision(decision: .newChat, confidence: 0.9, reason: "test")))
     var config = AppConfig()
     config.openwebui.model = "test-model"
+    config.activeProfile = "coding"
+    config.profiles.systemPrompts["coding"] = "Antworte mit wartbarem Swift-Code."
+    let client = FixedResponseClient()
     let engine = MiddleAIEngine(
-      manager: manager, client: FixedResponseClient(), ttsQueue: queue, config: config)
+      manager: manager, client: client, ttsQueue: queue, config: config)
     let result = try await engine.handle(text: "Testfrage", source: "test")
     try await Task.sleep(nanoseconds: 20_000_000)
     guard case .response(let answer, _) = result else {
@@ -497,6 +506,10 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(
       provider.spoken == ["Erster Satz. Zweiter Satz."],
       "complete response spoken as one continuous utterance")
+    try expect(
+      client.lastMessages.first?.role == .system
+        && client.lastMessages.first?.content == "Antworte mit wartbarem Swift-Code.",
+      "active profile system prompt delivered to provider")
   }
   @MainActor static func testResponseCancellation() async throws {
     let queue = TTSQueue(provider: RecordingTTS())
@@ -699,7 +712,10 @@ struct FixedRouter: ConversationRoutingStrategy {
 struct StaticAuth: AuthProvider {
   func token(baseURL: URL, session: URLSession) async throws -> String { "test-token" }
 }
-struct FixedResponseClient: AssistantClientProtocol {
+final class FixedResponseClient: AssistantClientProtocol, @unchecked Sendable {
+  private let lock = NSLock()
+  private var capturedMessages: [Message] = []
+  var lastMessages: [Message] { lock.withLock { capturedMessages } }
   func authenticate() async throws {}
   func health() async throws {}
   func models() async throws -> [String] { ["test-model"] }
@@ -710,6 +726,7 @@ struct FixedResponseClient: AssistantClientProtocol {
     messages: [Message], chatID: String, model: String,
     onToken: @escaping @Sendable (String) -> Void
   ) async throws -> String {
+    lock.withLock { capturedMessages = messages }
     onToken("Erster Satz. ")
     onToken("Zweiter Satz.")
     return "Erster Satz. Zweiter Satz."

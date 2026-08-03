@@ -94,6 +94,24 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// Number of days to retain MiddleAI's local routing copy. Zero keeps it indefinitely.
     public var localCacheRetentionDays = 90
   }
+  public struct Profiles: Codable, Equatable, Sendable {
+    public var systemPrompts: [String: String] = AppConfig.defaultProfileSystemPrompts
+  }
+
+  public static let supportedProfileIDs = [
+    "default", "management", "architecture", "coding", "research",
+  ]
+  public static let defaultProfileSystemPrompts: [String: String] = [
+    "default": "",
+    "management":
+      "Du bist ein erfahrener Management-Sparringspartner. Strukturiere Entscheidungen klar, benenne Chancen und Risiken und formuliere umsetzbare nächste Schritte.",
+    "architecture":
+      "Du bist ein Enterprise-IT-Architekt. Antworte technisch präzise, berücksichtige Abhängigkeiten, Sicherheit, Betrieb und langfristige Wartbarkeit.",
+    "coding":
+      "Du bist ein erfahrener Softwareentwickler. Liefere robuste, verständliche und wartbare Lösungen, erkläre wichtige Entscheidungen und weise auf relevante Tests hin.",
+    "research":
+      "Du arbeitest als sorgfältiger Recherche-Assistent. Trenne belegte Fakten von Schlussfolgerungen, berücksichtige Aktualität und Unsicherheiten und fasse die wichtigsten Ergebnisse strukturiert zusammen.",
+  ]
   public var assistant = Assistant()
   public var openwebui = OpenWebUI()
   public var openai = HostedAI()
@@ -107,12 +125,21 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public var api = API()
   public var logging = Logging()
   public var privacy = Privacy()
+  public var profiles = Profiles()
   public var spokenResponseMode = "smart_summary"
   public var spokenResponseThreshold = 850
   public var spokenResponseMaximumWords = 110
   public var activeProfile = "default"
 
   public init() {}
+
+  public func profileSystemPrompt(for profile: String) -> String {
+    profiles.systemPrompts[profile] ?? ""
+  }
+
+  public static func defaultProfileSystemPrompt(for profile: String) -> String {
+    defaultProfileSystemPrompts[profile] ?? ""
+  }
 
   public var assistantModel: String {
     get {
@@ -420,6 +447,12 @@ public enum ConfigLoader {
     guard (0...3_650).contains(c.privacy.localCacheRetentionDays) else {
       throw MiddleAIError.configuration(
         "privacy.local_cache_retention_days must be between 0 and 3650")
+    }
+    guard AppConfig.supportedProfileIDs.contains(c.activeProfile),
+      Set(c.profiles.systemPrompts.keys).isSubset(of: Set(AppConfig.supportedProfileIDs)),
+      c.profiles.systemPrompts.values.allSatisfy({ $0.count <= 20_000 })
+    else {
+      throw MiddleAIError.configuration("Profile configuration is invalid")
     }
   }
 

@@ -15,20 +15,18 @@ public enum InputResult: Sendable, Equatable {
   private let spokenSummarizer = SpokenResponseSummarizer()
   private var config: AppConfig
   private let logger = MiddleAILogger()
-  private let profiles: ProfileStore
   private var activeRequest: Task<String, Error>?
   private var activeRequestID: UUID?
   private var activeChatID: String?
   public private(set) var activeProfile: String
   public init(
     manager: ConversationManager, client: any AssistantClientProtocol, ttsQueue: TTSQueue,
-    config: AppConfig, profiles: ProfileStore = ProfileStore()
+    config: AppConfig
   ) {
     self.manager = manager
     self.client = client
     self.ttsQueue = ttsQueue
     self.config = config
-    self.profiles = profiles
     self.activeProfile = config.activeProfile
     self.pipeline = ResponsePipeline(queue: ttsQueue, mode: config.spokenResponseMode)
   }
@@ -65,8 +63,10 @@ public enum InputResult: Sendable, Equatable {
     let messages = Self.removingUnansweredUserSuffix(from: storedMessages)
     let userMessage = Message(role: .user, content: text)
     var requestMessages = messages + [userMessage]
-    if let prompt = profiles.profiles[activeProfile]?.systemPrompt, !prompt.isEmpty {
-      requestMessages.insert(Message(role: .system, content: prompt), at: 0)
+    let profilePrompt = config.profileSystemPrompt(for: activeProfile)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if !profilePrompt.isEmpty {
+      requestMessages.insert(Message(role: .system, content: profilePrompt), at: 0)
     }
     let remoteScope = Self.remoteScope(config.assistantScope)
     if conversation.openWebUIChatID == nil || conversation.openWebUIBaseURL != remoteScope {
@@ -175,9 +175,11 @@ public enum InputResult: Sendable, Equatable {
     }
     activeChatID = nil
   }
-  private var model: String {
-    let profileModel = profiles.profiles[activeProfile]?.model ?? ""
-    return profileModel.isEmpty ? config.assistantModel : profileModel
+  private var model: String { config.assistantModel }
+
+  public func activateProfile(_ profile: String) {
+    guard AppConfig.supportedProfileIDs.contains(profile) else { return }
+    activeProfile = profile
   }
   private func handle(_ command: LocalCommand) throws -> InputResult {
     switch command {

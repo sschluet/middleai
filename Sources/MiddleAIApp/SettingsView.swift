@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   case connection
+  case profiles
   case devices
   case speech
   case voice
@@ -16,6 +17,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var title: String {
     switch self {
     case .connection: return "Verbindung"
+    case .profiles: return "Profile"
     case .devices: return "Geräte"
     case .speech: return "Sprachausgabe"
     case .voice: return "Spracheingabe"
@@ -27,6 +29,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var subtitle: String {
     switch self {
     case .connection: return "KI-Anbieter und Modell"
+    case .profiles: return "System-Prompts und Arbeitsmodi"
     case .devices: return "Mikrofon und Lautsprecher"
     case .speech: return "Stimmen und Kurzfassungen"
     case .voice: return "Aktivierungstasten und Diktat"
@@ -38,6 +41,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var symbol: String {
     switch self {
     case .connection: return "network"
+    case .profiles: return "person.crop.rectangle.stack"
     case .devices: return "hifispeaker.2"
     case .speech: return "speaker.wave.3"
     case .voice: return "waveform.and.mic"
@@ -58,6 +62,7 @@ struct SettingsView: View {
   @State private var confirmsCacheDeletion = false
   @State private var audioInputDevices = AudioInputDeviceCatalog.availableDevices()
   @State private var audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
+  @State private var editingProfile = "default"
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
@@ -114,6 +119,7 @@ struct SettingsView: View {
           paneHeader
           switch selected ?? .connection {
           case .connection: connectionPane
+          case .profiles: profilesPane
           case .devices: devicesPane
           case .speech: speechPane
           case .voice: voicePane
@@ -271,6 +277,92 @@ struct SettingsView: View {
             .foregroundStyle(saveMessage.contains("verbunden") ? .green : .red)
         }
         Spacer()
+      }
+    }
+  }
+
+  private var profilesPane: some View {
+    VStack(spacing: 16) {
+      SettingsCard(
+        title: "Arbeitsprofile",
+        subtitle: "Passe MiddleAI mit einem zusätzlichen System-Prompt an deine Aufgabe an",
+        symbol: "person.crop.rectangle.stack"
+      ) {
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+          Text("Aktives Profil")
+            .frame(width: 112, alignment: .leading)
+            .foregroundStyle(.secondary)
+          Picker("Aktives Profil", selection: $state.config.activeProfile) {
+            ForEach(AppConfig.supportedProfileIDs, id: \.self) { profile in
+              Text(profileTitle(profile)).tag(profile)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          Spacer()
+        }
+        Text(
+          "Das aktive Profil gilt für Text- und Sprachanfragen. Der System-Prompt wird vor dem Gesprächskontext an den ausgewählten Antwortanbieter übergeben. Spracheingabe und lokale Diktatglättung bleiben davon unberührt."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Divider()
+        Text("Profil zum Bearbeiten auswählen")
+          .font(.callout.weight(.semibold))
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 145, maximum: 220), spacing: 10)],
+          alignment: .leading, spacing: 10
+        ) {
+          ForEach(AppConfig.supportedProfileIDs, id: \.self) { profile in
+            ProviderSelectionCard(
+              title: profileTitle(profile), subtitle: profileSubtitle(profile),
+              symbol: profileSymbol(profile), selected: editingProfile == profile
+            ) {
+              editingProfile = profile
+            }
+          }
+        }
+      }
+
+      SettingsCard(
+        title: "System-Prompt · \(profileTitle(editingProfile))",
+        subtitle: profileExplanation(editingProfile),
+        symbol: "text.quote"
+      ) {
+        TextEditor(text: profilePromptBinding)
+          .font(.body)
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 170)
+          .padding(10)
+          .background(
+            Color.primary.opacity(0.035),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+          )
+          .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+              .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
+          }
+        HStack {
+          Text("\(profilePromptBinding.wrappedValue.count) von 20.000 Zeichen")
+            .font(.caption2).foregroundStyle(.secondary)
+          Spacer()
+          Button("Vorgabe wiederherstellen") {
+            state.config.profiles.systemPrompts[editingProfile] =
+              AppConfig.defaultProfileSystemPrompt(for: editingProfile)
+          }
+          .buttonStyle(.bordered)
+          Button("Als aktives Profil verwenden") {
+            state.config.activeProfile = editingProfile
+          }
+          .buttonStyle(.bordered)
+        }
+        Divider()
+        HStack {
+          Button("Profile speichern") { state.saveProfileSettings() }
+            .buttonStyle(.borderedProminent)
+          Spacer()
+          Label(state.profileStatus, systemImage: "checkmark.circle")
+            .font(.caption).foregroundStyle(.secondary)
+        }
       }
     }
   }
@@ -1081,6 +1173,60 @@ struct SettingsView: View {
     default:
       return
         "Verwendet deinen eigenen OpenWebUI-Arbeitsbereich einschließlich dessen Werkzeuge, Websuche und serverseitiger Chat-Historie."
+    }
+  }
+
+  private var profilePromptBinding: Binding<String> {
+    Binding(
+      get: { state.config.profileSystemPrompt(for: editingProfile) },
+      set: { value in
+        state.config.profiles.systemPrompts[editingProfile] = String(value.prefix(20_000))
+      })
+  }
+
+  private func profileTitle(_ profile: String) -> String {
+    switch profile {
+    case "management": return "Management"
+    case "architecture": return "Architektur"
+    case "coding": return "Coding"
+    case "research": return "Recherche"
+    default: return "Standard"
+    }
+  }
+
+  private func profileSubtitle(_ profile: String) -> String {
+    switch profile {
+    case "management": return "Entscheidungen"
+    case "architecture": return "IT-Systeme"
+    case "coding": return "Entwicklung"
+    case "research": return "Recherche"
+    default: return "Allgemein"
+    }
+  }
+
+  private func profileSymbol(_ profile: String) -> String {
+    switch profile {
+    case "management": return "briefcase"
+    case "architecture": return "building.2"
+    case "coding": return "chevron.left.forwardslash.chevron.right"
+    case "research": return "magnifyingglass"
+    default: return "sparkles"
+    }
+  }
+
+  private func profileExplanation(_ profile: String) -> String {
+    switch profile {
+    case "management":
+      return "Lenkt Antworten auf Entscheidungen, Risiken und umsetzbare nächste Schritte."
+    case "architecture":
+      return "Ergänzt technische Perspektive, Abhängigkeiten, Sicherheit und Betrieb."
+    case "coding":
+      return "Fokussiert Antworten auf robuste Implementierung, Verständlichkeit und Tests."
+    case "research":
+      return "Fordert eine saubere Trennung von Fakten, Schlussfolgerungen und Unsicherheiten."
+    default:
+      return
+        "Ohne zusätzlichen Prompt arbeitet MiddleAI ausschließlich mit dem System-Prompt des Antwortanbieters."
     }
   }
 

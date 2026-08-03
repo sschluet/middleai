@@ -75,7 +75,7 @@ final class MenuBarController: NSObject {
     menu.addItem(profileItem)
     menu.addItem(.separator())
 
-    menu.addItem(actionItem("Quick Input…", action: #selector(showQuickInput)))
+    menu.addItem(actionItem("MiddleAI öffnen…", action: #selector(showQuickInput)))
     menu.addItem(actionItem("Setup / Settings…", action: #selector(showSetup)))
     menu.addItem(actionItem("Hilfe & Systemanforderungen…", action: #selector(showHelp)))
     menu.addItem(actionItem("New Conversation", action: #selector(startNewConversation)))
@@ -125,13 +125,6 @@ final class MenuBarController: NSObject {
 
   @objc private func selectProfile(_ sender: NSMenuItem) {
     guard let profile = sender.representedObject as? String else { return }
-    state?.submit(
-      profile == "architecture"
-        ? "Architekturmodus"
-        : profile == "coding"
-          ? "Codingmodus"
-          : profile == "management"
-            ? "Managementmodus"
-            : profile == "research" ? "Recherchemodus" : "Standardmodus")
+    state?.selectProfile(profile)
   }
 }

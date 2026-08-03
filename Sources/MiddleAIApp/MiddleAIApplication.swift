@@ -73,6 +73,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   @Published var voxtralLicenseAccepted = UserDefaults.standard.bool(
     forKey: "tts.voxtral.cc-by-nc-4.accepted")
   @Published var intelligenceStatus = "Bereit. Die schnelle lokale Hybrid-Auswahl ist aktiv."
+  @Published var profileStatus = "Profile sind bereit"
   @Published var conversations: [Conversation] = []
   @Published var localCacheStatus = "Lokaler Cache wird geprüft"
   @Published var diagnosticChecks: [DiagnosticCheck] = []
@@ -254,6 +255,11 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     case .response(let answer, _), .local(let answer), .clarification(let answer):
       responseText = answer
     }
+    if let activeProfile = engine?.activeProfile, config.activeProfile != activeProfile {
+      config.activeProfile = activeProfile
+      try? ConfigLoader.save(config)
+      profileStatus = "Profil \(Self.profileTitle(activeProfile)) ist aktiv"
+    }
     refreshConversations()
   }
   func newConversation() {
@@ -273,6 +279,43 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   func startNewConversation() {
     newConversation()
     showQuickInput()
+  }
+
+  func selectProfile(_ profile: String) {
+    guard AppConfig.supportedProfileIDs.contains(profile), let engine else { return }
+    config.activeProfile = profile
+    engine.activateProfile(profile)
+    do {
+      try ConfigLoader.save(config)
+      responseText = "Profil \(Self.profileTitle(profile)) ist aktiv."
+      profileStatus = "Profil \(Self.profileTitle(profile)) ist aktiv"
+      objectWillChange.send()
+    } catch {
+      lastError = error.localizedDescription
+      profileStatus = "Profil konnte nicht gespeichert werden"
+    }
+  }
+
+  func saveProfileSettings() {
+    do {
+      try ConfigLoader.save(config)
+      try rebuild()
+      profileStatus = "Profile und System-Prompts wurden gespeichert"
+      Task { await connectAndServe() }
+    } catch {
+      lastError = error.localizedDescription
+      profileStatus = "Profile konnten nicht gespeichert werden"
+    }
+  }
+
+  private static func profileTitle(_ profile: String) -> String {
+    switch profile {
+    case "management": return "Management"
+    case "architecture": return "Architektur"
+    case "coding": return "Coding"
+    case "research": return "Recherche"
+    default: return "Standard"
+    }
   }
   func refreshConversations() {
     do {

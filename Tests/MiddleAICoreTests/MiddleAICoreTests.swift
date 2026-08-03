@@ -33,6 +33,17 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertEqual(parsed.tts.outputDeviceUID, "speaker-uid")
   }
 
+  func testProfileSystemPromptsRoundTrip() throws {
+    var config = AppConfig()
+    config.activeProfile = "research"
+    config.profiles.systemPrompts["research"] = "Prüfe jede Quelle und benenne Unsicherheiten."
+    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    XCTAssertEqual(parsed.activeProfile, "research")
+    XCTAssertEqual(
+      parsed.profileSystemPrompt(for: "research"),
+      "Prüfe jede Quelle und benenne Unsicherheiten.")
+  }
+
   func testResearchFallbackSelectsConclusionsAndNextSteps() {
     let response =
       "Die Recherche umfasst fünf Märkte und zahlreiche Quellen. "
