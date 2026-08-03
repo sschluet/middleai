@@ -154,12 +154,15 @@ struct SettingsView: View {
         Text(pane.title).font(.title2.weight(.semibold))
         Text(pane.subtitle).font(.callout).foregroundStyle(.secondary)
       }
-      Spacer()
+      .frame(maxWidth: .infinity, alignment: .leading)
+      Spacer(minLength: 12)
       Text(
         state.status == "Connected"
           ? "\(state.config.assistantProviderTitle) verbunden" : "Lokal konfiguriert"
       )
       .font(.caption.weight(.medium))
+      .lineLimit(1)
+      .fixedSize(horizontal: true, vertical: false)
       .foregroundStyle(state.status == "Connected" ? Color.green : .secondary)
       .padding(.horizontal, 10).padding(.vertical, 6)
       .background(Color.primary.opacity(0.045), in: Capsule())
@@ -172,17 +175,22 @@ struct SettingsView: View {
         title: "Antwortanbieter", subtitle: "Wohin MiddleAI deine gesprochenen Anfragen sendet",
         symbol: "point.3.connected.trianglepath.dotted"
       ) {
-        Picker("Anbieter", selection: $state.config.assistant.provider) {
-          Text("OpenWebUI · eigener Arbeitsbereich").tag("openwebui")
-          Text("OpenAI Platform · API-Schlüssel").tag("openai")
-          Text("OpenRouter · API-Schlüssel").tag("openrouter")
-        }
-        .pickerStyle(.segmented)
-        .onChange(of: state.config.assistant.provider) { _, _ in
-          password = ""
-          state.providerModels = []
-          state.providerModelStatus = "Bitte für diesen Anbieter authentifizieren"
-          saveMessage = ""
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: 155, maximum: 240), spacing: 10)],
+          alignment: .leading, spacing: 10
+        ) {
+          ProviderSelectionCard(
+            title: "OpenWebUI", subtitle: "Eigener Server", symbol: "server.rack",
+            selected: state.config.assistant.provider == "openwebui"
+          ) { selectAssistantProvider("openwebui") }
+          ProviderSelectionCard(
+            title: "OpenAI", subtitle: "Platform API", symbol: "sparkles",
+            selected: state.config.assistant.provider == "openai"
+          ) { selectAssistantProvider("openai") }
+          ProviderSelectionCard(
+            title: "OpenRouter", subtitle: "Modell-Router", symbol: "arrow.triangle.branch",
+            selected: state.config.assistant.provider == "openrouter"
+          ) { selectAssistantProvider("openrouter") }
         }
         Text(answerProviderDescription).font(.caption).foregroundStyle(.secondary)
         Label(
@@ -1210,6 +1218,15 @@ struct SettingsView: View {
           ? "Gespeichert und verbunden" : state.lastError
       }
     } catch { saveMessage = error.localizedDescription }
+  }
+
+  private func selectAssistantProvider(_ provider: String) {
+    guard state.config.assistant.provider != provider else { return }
+    state.config.assistant.provider = provider
+    password = ""
+    state.providerModels = []
+    state.providerModelStatus = "Bitte für diesen Anbieter authentifizieren"
+    saveMessage = ""
   }
 
   private func openAppleVoiceSettings() {

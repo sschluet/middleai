@@ -2,6 +2,55 @@ import AppKit
 import MiddleAICore
 import SwiftUI
 
+struct ProviderSelectionCard: View {
+  let title: String
+  let subtitle: String
+  let symbol: String
+  let selected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 10) {
+        Image(systemName: symbol)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(selected ? Color.white : Color.accentColor)
+          .frame(width: 31, height: 31)
+          .background(
+            selected ? Color.white.opacity(0.18) : Color.accentColor.opacity(0.10),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .lineLimit(1)
+          Text(subtitle)
+            .font(.caption2)
+            .foregroundStyle(selected ? Color.white.opacity(0.78) : Color.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 0)
+        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(selected ? Color.white : Color.secondary.opacity(0.7))
+      }
+      .padding(.horizontal, 12)
+      .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+      .background(
+        selected ? Color.accentColor : Color.primary.opacity(0.035),
+        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+      )
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .strokeBorder(
+            selected ? Color.accentColor : Color.primary.opacity(0.075), lineWidth: 0.8)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+}
+
 struct IntelligenceStep: View {
   let number: String
   let title: String
@@ -117,6 +166,7 @@ struct SettingsCard<Content: View>: View {
       RoundedRectangle(cornerRadius: 18, style: .continuous)
         .strokeBorder(Color.primary.opacity(0.075), lineWidth: 0.8)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
   }
 }
