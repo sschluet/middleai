@@ -189,6 +189,8 @@ The server refuses configuration on `0.0.0.0`. New installations require a rando
 
 Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and can optionally ask a local `/v1/chat/completions` routing model. If that model is unavailable, the heuristic path remains operational.
 
+Within the configured continuation window, a new voice request continues the active conversation and sends its prior user/assistant messages to OpenWebUI, OpenAI or OpenRouter. This keeps natural follow-ups such as “Warum ist das so?” in context even when they repeat no keywords. Say “Neue Frage” or “Neues Thema”, use the local “Neuer Chat” command, or open a new conversation from the menu to deliberately reset the context.
+
 The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
 
 ## Profiles

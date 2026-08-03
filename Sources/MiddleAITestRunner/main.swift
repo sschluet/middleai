@@ -42,6 +42,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("SentenceBuffer", testSentenceBuffer), ("Speech text", testSpeechText),
       ("Dictation formatting", testDictationFormatting),
       ("HeuristicRouter continuation", testRouterContinuation),
+      ("Hosted conversation history", testHostedConversationHistory),
       ("HeuristicRouter new topic", testRouterNewTopic), ("HybridRouter", testHybrid),
       ("ConversationManager", testManager), ("Confidence management", testConfidence),
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
@@ -432,6 +433,43 @@ struct FixedRouter: ConversationRoutingStrategy {
         input: "Und wie sieht es mit Gardena aus?", current: c, recent: [c], messages: [:], now: now
       ))
     try expect(r.decision == RoutingDecisionKind.continueCurrent, "continuation")
+
+    let naturalFollowUp = try await HeuristicRouter().route(
+      ConversationContext(
+        input: "Warum ist das so?", current: c, recent: [c], messages: [:], now: now
+      ))
+    try expect(naturalFollowUp.decision == .continueCurrent, "natural follow-up continuation")
+
+    let explicitNewTopic = try await HeuristicRouter().route(
+      ConversationContext(
+        input: "Andere Frage: Wie hoch ist der Eiffelturm?", current: c, recent: [c], messages: [:],
+        now: now
+      ))
+    try expect(explicitNewTopic.decision == .newChat, "explicit new topic")
+  }
+  @MainActor static func testHostedConversationHistory() async throws {
+    let queue = TTSQueue(provider: RecordingTTS())
+    let manager = ConversationManager(
+      store: InMemoryConversationStore(), router: HybridRouter(heuristic: HeuristicRouter()))
+    var config = AppConfig()
+    config.openwebui.model = "test-model"
+    let client = FixedResponseClient()
+    let engine = MiddleAIEngine(
+      manager: manager, client: client, ttsQueue: queue, config: config)
+
+    let first = try await engine.handle(text: "Was ist Photosynthese?", source: "test")
+    let second = try await engine.handle(
+      text: "Warum ist das für Pflanzen wichtig?", source: "test")
+    guard case .response(_, let firstID) = first, case .response(_, let secondID) = second else {
+      throw TestFailure.failed("hosted conversation responses")
+    }
+    try expect(firstID == secondID, "follow-up stays in the same local conversation")
+    try expect(
+      client.lastMessages.map(\.role) == [.user, .assistant, .user],
+      "hosted provider receives prior user and assistant messages")
+    try expect(
+      client.lastMessages.first?.content == "Was ist Photosynthese?",
+      "hosted provider receives the original question")
   }
   static func testRouterNewTopic() async throws {
     let now = Date()

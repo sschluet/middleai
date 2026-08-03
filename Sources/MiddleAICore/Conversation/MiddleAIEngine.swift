@@ -148,11 +148,12 @@ public enum InputResult: Sendable, Equatable {
       try Task.checkCancellation()
       if !spoken.isEmpty { ttsQueue.enqueue(spoken) }
     }
+    let assistantMessage = Message(role: .assistant, content: response)
     try manager.add(userMessage, to: conversation.id)
-    try manager.add(Message(role: .assistant, content: response), to: conversation.id)
+    try manager.add(assistantMessage, to: conversation.id)
     conversation.lastUsedAt = Date()
     conversation.summary = Self.summary(
-      messages: messages + [Message(role: .assistant, content: response)])
+      messages: messages + [userMessage, assistantMessage])
     try manager.update(conversation)
     logger.event(
       "response_completed",

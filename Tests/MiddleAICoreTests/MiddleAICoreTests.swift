@@ -4,6 +4,35 @@ import XCTest
 @testable import MiddleAICore
 
 final class MiddleAICoreTests: XCTestCase {
+  func testImmediateFollowUpContinuesCurrentConversation() async throws {
+    let now = Date()
+    let conversation = Conversation(
+      title: "Photosynthese", summary: "Pflanzen wandeln Licht in Energie um",
+      lastUsedAt: now.addingTimeInterval(-30))
+    let context = ConversationContext(
+      input: "Warum ist das für Pflanzen wichtig?", current: conversation,
+      recent: [conversation], messages: [:], now: now)
+
+    let heuristic = try await HeuristicRouter().route(context)
+    let hybrid = try await HybridRouter(heuristic: HeuristicRouter()).route(context)
+
+    XCTAssertEqual(heuristic.decision, .continueCurrent)
+    XCTAssertEqual(hybrid.decision, .continueCurrent)
+    XCTAssertEqual(hybrid.chatID, conversation.id)
+  }
+
+  func testExplicitTopicChangeStartsNewConversation() async throws {
+    let now = Date()
+    let conversation = Conversation(
+      title: "Photosynthese", summary: "Pflanzen", lastUsedAt: now)
+    let decision = try await HeuristicRouter().route(
+      ConversationContext(
+        input: "Andere Frage: Wie hoch ist der Eiffelturm?", current: conversation,
+        recent: [conversation], messages: [:], now: now))
+
+    XCTAssertEqual(decision.decision, .newChat)
+  }
+
   func testPrivacyRetentionRoundTrip() throws {
     var config = AppConfig()
     config.privacy.localCacheRetentionDays = 365

@@ -832,7 +832,7 @@ struct SettingsView: View {
           Text("Sekunden").foregroundStyle(.secondary)
         }
         Text(
-          "Innerhalb dieses Zeitraums behandelt MiddleAI kurze Anschlüsse wie „Und Hannover?“ bevorzugt als Folgefrage. 300 Sekunden sind ein guter Standardwert."
+          "Innerhalb dieses Zeitraums bleibt Spracheingabe in der aktiven Unterhaltung und übernimmt deren Kontext. „Neue Frage“, „Neues Thema“ oder der Menüpunkt für eine neue Unterhaltung beginnen bewusst ohne alten Kontext. 300 Sekunden sind ein guter Standardwert."
         )
         .font(.caption).foregroundStyle(.secondary)
       }

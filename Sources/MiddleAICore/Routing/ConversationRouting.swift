@@ -44,15 +44,30 @@ public struct HeuristicRouter: ConversationRoutingStrategy {
       return RoutingDecision(
         decision: .newChat, confidence: 0.98, reason: "No current conversation")
     }
+    let normalizedInput = context.input.trimmingCharacters(in: .whitespacesAndNewlines)
+      .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+      .lowercased()
+    let newTopicMarkers = [
+      "neues thema", "neue frage", "andere frage", "anderes thema", "themenwechsel",
+      "unabhangig davon", "new topic", "new question", "different question",
+      "switch topic", "unrelated question",
+    ]
+    if newTopicMarkers.contains(where: { normalizedInput.hasPrefix($0) }) {
+      return RoutingDecision(
+        decision: .newChat, confidence: 0.96,
+        reason: "The input explicitly starts a new topic")
+    }
     let currentText = searchableText(current, context.messages[current.id] ?? [])
     let currentSimilarity = TextSimilarity.cosine(context.input, currentText)
     let age = max(0, context.now.timeIntervalSince(current.lastUsedAt))
     let recency = exp(-age / max(60, continuationTimeout))
     let followUpMarkers = [
       "und ", "außerdem", "davon", "dazu", "nochmal", "noch mal", "welches davon",
-      "wie sieht es mit", "what about", "and ",
+      "wie sieht es mit", "warum", "wieso", "weshalb", "erklär", "erlauter",
+      "kannst du das", "was meinst du", "mehr dazu", "genauer", "darauf", "dabei",
+      "what about", "and ", "why", "explain", "can you", "tell me more",
     ]
-    let followUp = followUpMarkers.contains { context.input.lowercased().hasPrefix($0) } ? 0.22 : 0
+    let followUp = followUpMarkers.contains { normalizedInput.hasPrefix($0) } ? 0.22 : 0
     let currentScore = min(0.99, currentSimilarity * 0.65 + recency * 0.30 + followUp)
 
     var bestOther: (Conversation, Double)?
@@ -68,7 +83,12 @@ public struct HeuristicRouter: ConversationRoutingStrategy {
         decision: .switchChat, chatID: other.0.id, confidence: min(0.95, other.1),
         reason: "A recent conversation is a stronger semantic match")
     }
-    if currentScore >= 0.44 || (age <= continuationTimeout && followUp > 0) {
+    if age <= continuationTimeout {
+      return RoutingDecision(
+        decision: .continueCurrent, chatID: current.id, confidence: max(0.78, currentScore),
+        reason: "The current conversation is inside the configured continuation window")
+    }
+    if currentScore >= 0.44 {
       return RoutingDecision(
         decision: .continueCurrent, chatID: current.id, confidence: max(0.56, currentScore),
         reason: "Recency and semantic continuation favor the current conversation")
@@ -252,6 +272,15 @@ public struct HybridRouter: ConversationRoutingStrategy {
         decision: heuristicResult.decision, chatID: heuristicResult.chatID,
         confidence: min(0.99, (heuristicResult.confidence + embeddingResult.confidence) / 2 + 0.08),
         reason: "Heuristic and local semantic routers agree")
+    }
+    // A lexical embedding cannot resolve short references such as "Warum ist das so?".
+    // Preserve an actively continued conversation. The configured continuation window is a
+    // deliberate user preference and must not be overruled by missing lexical overlap.
+    if heuristicResult.decision == .continueCurrent,
+      embeddingResult.decision == .newChat,
+      heuristicResult.confidence >= 0.75
+    {
+      return heuristicResult
     }
     if let llm, let result = try? await llm.route(context) { return result }
     return heuristicResult.confidence >= embeddingResult.confidence
