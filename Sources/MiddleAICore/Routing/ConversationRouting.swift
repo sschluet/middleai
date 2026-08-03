@@ -215,11 +215,15 @@ public struct AppleIntelligenceRouter: ConversationRoutingStrategy {
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
           let data = String(text[start...end]).data(using: .utf8),
           let decision = try? JSONDecoder().decode(RoutingDecision.self, from: data)
-        else { throw MiddleAIError.invalidResponse("Apple Intelligence lieferte keine gültige Chat-Auswahl.") }
+        else {
+          throw MiddleAIError.invalidResponse(
+            "Apple Intelligence lieferte keine gültige Chat-Auswahl.")
+        }
         return decision
       }
     #endif
-    throw MiddleAIError.configuration("Apple Intelligence benötigt macOS 26 und ein unterstütztes Gerät.")
+    throw MiddleAIError.configuration(
+      "Apple Intelligence benötigt macOS 26 und ein unterstütztes Gerät.")
   }
 }
 

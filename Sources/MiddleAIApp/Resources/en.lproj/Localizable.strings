@@ -1,0 +1,16 @@
+"Verbindung" = "Connection";
+"Sprachausgabe" = "Speech output";
+"Spracheingabe" = "Voice input";
+"Intelligenz" = "Intelligence";
+"Diagnose" = "Diagnostics";
+"Hilfe" = "Help";
+"Einstellungen" = "Settings";
+"Speichern und verbinden" = "Save and connect";
+"Antworten vorlesen" = "Read responses aloud";
+"Lokaler Gesprächscache" = "Local conversation cache";
+"Bereinigen" = "Clean up";
+"Abbrechen" = "Cancel";
+"Lokalen Cache löschen" = "Delete local cache";
+"Gesamten lokalen Cache löschen" = "Delete entire local cache";
+"Älter als 30 Tage" = "Older than 30 days";
+"Älter als 90 Tage" = "Older than 90 days";

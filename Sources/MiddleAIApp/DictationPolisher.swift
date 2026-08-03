@@ -55,17 +55,22 @@ actor DictationPolisher {
         case .available:
           return "Apple Intelligence ist lokal verfügbar. Diktate verlassen den Mac nicht."
         case .unavailable(.appleIntelligenceNotEnabled):
-          return "Apple Intelligence ist deaktiviert. Bis zur Aktivierung wird nur eine einfache lokale Bereinigung verwendet."
+          return
+            "Apple Intelligence ist deaktiviert. Bis zur Aktivierung wird nur eine einfache lokale Bereinigung verwendet."
         case .unavailable(.modelNotReady):
-          return "Das lokale Apple-Modell wird noch vorbereitet. Bis dahin wird eine einfache lokale Bereinigung verwendet."
+          return
+            "Das lokale Apple-Modell wird noch vorbereitet. Bis dahin wird eine einfache lokale Bereinigung verwendet."
         case .unavailable(.deviceNotEligible):
-          return "Das lokale Apple-Modell ist auf diesem Mac nicht verfügbar. Es wird eine einfache lokale Bereinigung verwendet."
+          return
+            "Das lokale Apple-Modell ist auf diesem Mac nicht verfügbar. Es wird eine einfache lokale Bereinigung verwendet."
         case .unavailable:
-          return "Das lokale Apple-Modell ist derzeit nicht verfügbar. Es wird eine einfache lokale Bereinigung verwendet."
+          return
+            "Das lokale Apple-Modell ist derzeit nicht verfügbar. Es wird eine einfache lokale Bereinigung verwendet."
         }
       }
     #endif
-    return "Für die KI-Glättung ist macOS 26 mit Apple Intelligence erforderlich. Es wird eine einfache lokale Bereinigung verwendet."
+    return
+      "Für die KI-Glättung ist macOS 26 mit Apple Intelligence erforderlich. Es wird eine einfache lokale Bereinigung verwendet."
   }
 
   nonisolated static func basicCleanup(_ input: String) -> String {
@@ -106,9 +111,11 @@ actor DictationPolisher {
     let conservativeOriginal = basicCleanup(original)
     let ratio = Double(result.count) / Double(max(1, conservativeOriginal.count))
     guard ratio >= 0.72, ratio <= 1.28 else { return nil }
-    guard protectedValues(in: conservativeOriginal).allSatisfy({ protected in
-      result.range(of: protected, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-    }) else { return nil }
+    guard
+      protectedValues(in: conservativeOriginal).allSatisfy({ protected in
+        result.range(of: protected, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+      })
+    else { return nil }
     guard numberValues(in: result) == numberValues(in: conservativeOriginal) else { return nil }
 
     let originalWords = meaningfulWords(in: conservativeOriginal)

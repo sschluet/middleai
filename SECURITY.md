@@ -6,19 +6,23 @@ MiddleAI is local-first and transmits only the user's request and cached convers
 - `.env` is gitignored and supported only as a development password fallback.
 - TLS verification defaults to on. A private CA may be added without disabling the system trust store.
 - The HTTP listener accepts only `127.0.0.1` or `::1`; `0.0.0.0` is rejected during config parsing and server startup.
-- Local API authentication is optionally supported through a bearer token in Keychain.
+- New installations require a randomly generated local API bearer token by default. Legacy configurations retain their explicit setting. The token uses a separate `local_http_token` Keychain account.
 - All TTS implementations are local. There is no cloud provider or automatic external fallback.
 - Microphone samples remain in memory and are transcribed locally with Core ML. MiddleAI does not save recordings.
 - Parakeet model files are downloaded from the FluidInference Hugging Face repository on first use and cached locally by FluidAudio.
 - Managed TTS model files are downloaded only after the corresponding local engine is selected. Supertonic and PocketTTS use FluidInference model repositories; Qwen3-TTS and Voxtral use their documented Hugging Face repositories.
-- Qwen3-TTS and Voxtral install an isolated Python/MLX runtime under `~/.middleai/runtime`. The pinned `uv` bootstrap archive is verified with SHA-256 before execution. Python packages and model weights require network access during initial preparation; synthesized text and audio remain local.
+- Qwen3-TTS and Voxtral install an isolated Python/MLX runtime under `~/.middleai/runtime`. The pinned `uv` bootstrap archive is verified with SHA-256 before execution. Python runtime dependencies are locked to exact versions and SHA-256 hashes and installed with hash enforcement. Managed models record source, revision, license and validation state in an installation receipt; synthesized text and audio remain local.
 - Optional Apple Intelligence dictation polishing runs on-device. Candidate corrections are rejected if protected terms or numbers change or if the wording diverges substantially from the transcript.
-- Dictation briefly uses the macOS pasteboard, restores its prior items after pasting and does not log the transcript.
-- INFO logging records event names, latency-ready metadata and sizes—not prompt/response text. Sensitive metadata keys are discarded.
+- Plain dictation uses the focused accessibility element when supported. Rich-text fallback briefly uses the macOS pasteboard, restores its prior items after app-specific delays and does not log the transcript.
+- INFO logging accepts only an allow-list of event metadata such as source, latency and sizes—not prompt/response text, usernames or arbitrary fields.
 - There is no analytics, telemetry, crash upload or automatic external data transfer.
 
 Optional model downloads remain subject to their own licenses. Voxtral is CC BY-NC 4.0 and must not be used for commercial or business purposes. See `THIRD_PARTY_NOTICES.md` for sources and terms.
 
 `tls_verify=false` is technically understood for controlled development environments, but should not be used in production. The UI keeps verification enabled by default.
 
+The local HTTP parser enforces header/body limits, timeouts, bounded concurrency and bounded queue depth. Request status and cancellation endpoints reveal only opaque IDs and processing state. Configuration is written atomically with `0600` permissions under a `0700` data directory.
+
 The local model executable path is user-controlled configuration. MiddleAI launches that exact executable directly through `Process`; it does not invoke a shell or interpolate command strings.
+
+CI runs formatting, Swift 6 builds, portable and XCTest suites, and a repository policy audit that rejects private-key material, likely hard-coded credentials, missing notices and unhashed TTS runtime dependencies. Tagged releases additionally publish a dependency inventory beside the application and checksum.

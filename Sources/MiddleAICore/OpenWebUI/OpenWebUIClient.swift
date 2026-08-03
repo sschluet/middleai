@@ -10,8 +10,13 @@ public protocol OpenWebUIClientProtocol: Sendable {
     messages: [Message], chatID: String, model: String,
     onToken: @escaping @Sendable (String) -> Void
   ) async throws -> String
+  func cancel(chatID: String) async
   func listChats() async throws -> [(id: String, title: String)]
   func chatURL(id: String) -> URL
+}
+
+extension OpenWebUIClientProtocol {
+  public func cancel(chatID: String) async {}
 }
 
 public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable {
@@ -35,11 +40,66 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
     let done: Bool
   }
 
+  private struct AsyncTaskResponse: Decodable, Sendable {
+    let status: Bool?
+    let taskIDs: [String]?
+
+    enum CodingKeys: String, CodingKey {
+      case status
+      case taskIDs = "task_ids"
+    }
+
+    var accepted: Bool { status == true && !(taskIDs ?? []).isEmpty }
+  }
+
+  private struct StreamChunk: Decodable, Sendable {
+    struct Choice: Decodable, Sendable {
+      struct Content: Decodable, Sendable {
+        struct ToolCall: Decodable, Sendable {}
+
+        let content: String?
+        let toolCalls: [ToolCall]?
+
+        enum CodingKeys: String, CodingKey {
+          case content
+          case toolCalls = "tool_calls"
+        }
+      }
+
+      let delta: Content?
+      let message: Content?
+      let finishReason: String?
+
+      enum CodingKeys: String, CodingKey {
+        case delta
+        case message
+        case finishReason = "finish_reason"
+      }
+    }
+
+    struct EventData: Decodable, Sendable {
+      let content: String?
+      let done: Bool?
+    }
+
+    let choices: [Choice]?
+    let data: EventData?
+    let content: String?
+    let done: Bool?
+  }
+
+  private enum StreamOutcome: Sendable {
+    case completed(CompletionResult)
+    case asynchronous
+  }
+
+  private enum StreamingFailure: Error, Sendable {
+    case rejected(status: Int, detail: String?)
+  }
+
   public let baseURL: URL
   private let auth: any AuthProvider
   private let session: URLSession
-  private let tlsVerify: Bool
-  private let caFile: String?
   private let lock = NSLock()
   private var bearer: String?
   private var modelOptions: [String: ModelOptions] = [:]
@@ -49,8 +109,6 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
   ) {
     self.baseURL = baseURL
     self.auth = auth
-    self.tlsVerify = tlsVerify
-    self.caFile = caFile
     if let session {
       self.session = session
     } else {
@@ -114,30 +172,44 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
       "chat_id": chatID, "message_id": assistantID, "session_id": sessionID,
       "tool_ids": options.toolIDs, "files": [], "features": features, "model": model,
     ]
-    let body: [String: Any] = [
-      "model": model, "messages": messages.map(messageJSON), "stream": false, "chat_id": chatID,
+    var body: [String: Any] = [
+      "model": model, "messages": messages.map(messageJSON), "stream": true, "chat_id": chatID,
       "id": assistantID, "session_id": sessionID, "tool_ids": options.toolIDs, "files": [],
       "features": features, "metadata": metadata,
       "background_tasks": [
         "title_generation": false, "tags_generation": false, "follow_up_generation": false,
       ],
     ]
-    let (data, _) = try await request(path: "api/chat/completions", method: "POST", json: body)
     let initial: CompletionResult
-    if let immediate = try? completionResult(from: data), immediate.isComplete {
-      initial = immediate
-    } else if isAsyncTaskResponse(data) {
-      let persisted = try await waitForAssistant(chatID: chatID, assistantID: assistantID)
-      initial = CompletionResult(text: persisted, finishReason: "stop", requestedToolCall: false)
-    } else if let incomplete = try? completionResult(from: data), incomplete.finishReason == "length" {
-      throw MiddleAIError.invalidResponse(
-        "OpenWebUI hat die Antwort wegen des Token-Limits abgeschnitten. Bitte das Ausgabelimit des Modells erhöhen.")
-    } else if let toolCall = try? completionResult(from: data), toolCall.requestedToolCall {
-      throw MiddleAIError.invalidResponse(
-        "OpenWebUI hat einen Werkzeugaufruf begonnen, aber nicht abgeschlossen.")
-    } else {
-      initial = try completionResult(from: data)
+    do {
+      switch try await stream(path: "api/chat/completions", json: body, onToken: onToken) {
+      case .completed(let streamed):
+        initial = try validated(streamed)
+      case .asynchronous:
+        let persisted = try await waitForAssistant(
+          chatID: chatID, assistantID: assistantID, onToken: onToken)
+        initial = CompletionResult(text: persisted, finishReason: "stop", requestedToolCall: false)
+      }
+    } catch let StreamingFailure.rejected(status, _) where Self.supportsNonStreamingFallback(status)
+    {
+      // Some OpenWebUI adapters only expose the OpenAI-compatible non-streaming response over
+      // HTTP. Retrying is safe here because a rejected request did not start a generation.
+      body["stream"] = false
+      let data = try await request(path: "api/chat/completions", method: "POST", json: body).0
+      if isAsyncTaskResponse(data) {
+        let persisted = try await waitForAssistant(
+          chatID: chatID, assistantID: assistantID, onToken: onToken)
+        initial = CompletionResult(text: persisted, finishReason: "stop", requestedToolCall: false)
+      } else {
+        let completion = try validated(completionResult(from: data))
+        onToken(completion.text)
+        initial = completion
+      }
+    } catch let StreamingFailure.rejected(status, detail) {
+      let suffix = detail.map { ": \($0)" } ?? ""
+      throw MiddleAIError.network("OpenWebUI antwortet mit HTTP \(status)\(suffix)")
     }
+    try Task.checkCancellation()
     let completed = messages + [Message(id: assistantID, role: .assistant, content: initial.text)]
     let completionBody: [String: Any] = [
       "model": model, "messages": completed.map(messageJSON), "chat_id": chatID,
@@ -149,7 +221,9 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
       ],
     ]
     let finalizedData = try await request(
-      path: "api/chat/completed", method: "POST", json: completionBody).0
+      path: "api/chat/completed", method: "POST", json: completionBody
+    ).0
+    try Task.checkCancellation()
     let finalized = completionTextIfPresent(from: finalizedData) ?? initial.text
     _ = try await request(
       path: "api/v1/chats/\(chatID)", method: "POST",
@@ -159,7 +233,6 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
           messages: messages + [Message(id: assistantID, role: .assistant, content: finalized)],
           model: model)
       ])
-    onToken(finalized)
     return finalized
   }
   public func listChats() async throws -> [(id: String, title: String)] {
@@ -171,6 +244,10 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
       guard let id = row["id"] as? String else { return nil }
       return (id, (row["title"] as? String) ?? "Untitled")
     }
+  }
+  public func cancel(chatID: String) async {
+    guard !chatID.isEmpty else { return }
+    _ = try? await request(path: "api/tasks/chat/\(chatID)/stop", method: "POST", json: [:])
   }
   public func chatURL(id: String) -> URL { baseURL.appendingPathComponent("c/\(id)") }
 
@@ -261,21 +338,26 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
     return nil
   }
   private func isAsyncTaskResponse(_ data: Data) -> Bool {
-    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      return false
-    }
-    return root["status"] as? Bool == true && root["task_ids"] is [Any]
+    (try? JSONDecoder().decode(AsyncTaskResponse.self, from: data).accepted) == true
   }
-  private func waitForAssistant(chatID: String, assistantID: String) async throws -> String {
+  private func waitForAssistant(
+    chatID: String, assistantID: String,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async throws -> String {
     let deadline = Date().addingTimeInterval(180)
+    var delivered = ""
     while Date() < deadline {
+      try Task.checkCancellation()
       let (data, _) = try await request(path: "api/v1/chats/\(chatID)")
-      if let assistant = assistantText(from: data, assistantID: assistantID), assistant.done,
-        !assistant.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      {
-        return assistant.text
+      if let assistant = assistantText(from: data, assistantID: assistantID) {
+        delivered = emitNewContent(assistant.text, after: delivered, onToken: onToken)
+        if assistant.done,
+          !assistant.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+          return assistant.text
+        }
       }
-      try await Task.sleep(nanoseconds: 500_000_000)
+      try await Task.sleep(for: .milliseconds(350))
     }
     throw MiddleAIError.network("Timed out waiting for the Open WebUI response")
   }
@@ -357,17 +439,112 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
     }
     return nil
   }
+  private func validated(_ result: CompletionResult) throws -> CompletionResult {
+    if result.finishReason == "length" {
+      throw MiddleAIError.invalidResponse(
+        "OpenWebUI hat die Antwort wegen des Token-Limits abgeschnitten. "
+          + "Bitte das Ausgabelimit des Modells erhöhen.")
+    }
+    if result.requestedToolCall
+      && result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      throw MiddleAIError.invalidResponse(
+        "OpenWebUI hat einen Werkzeugaufruf begonnen, aber nicht abgeschlossen.")
+    }
+    guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw MiddleAIError.invalidResponse("Chat completion contains no assistant text")
+    }
+    return result
+  }
+
+  private static func supportsNonStreamingFallback(_ status: Int) -> Bool {
+    [400, 404, 405, 406, 415, 422, 501].contains(status)
+  }
+
+  @discardableResult
+  private func emitNewContent(
+    _ candidate: String, after delivered: String,
+    onToken: @escaping @Sendable (String) -> Void
+  ) -> String {
+    guard candidate != delivered else { return delivered }
+    if candidate.hasPrefix(delivered) {
+      let suffix = String(candidate.dropFirst(delivered.count))
+      if !suffix.isEmpty { onToken(suffix) }
+      return candidate
+    }
+    if delivered.hasPrefix(candidate) { return delivered }
+    // Persisted messages can be rewritten while a tool is running. Preserve already delivered
+    // text and emit only a newly appended suffix; speaking the whole snapshot would duplicate it.
+    let common = candidate.commonPrefix(with: delivered)
+    let suffix = String(candidate.dropFirst(common.count))
+    if !suffix.isEmpty { onToken(suffix) }
+    return candidate
+  }
+
   private func stream(
     path: String, json: [String: Any], onToken: @escaping @Sendable (String) -> Void
-  ) async throws -> String {
+  ) async throws -> StreamOutcome {
     let request = try authorized(path, method: "POST", json: json)
-    let delegate = SSEDelegate(onToken: onToken, verify: tlsVerify, caFile: caFile)
-    let streaming = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-    defer { streaming.finishTasksAndInvalidate() }
-    return try await withCheckedThrowingContinuation { continuation in
-      delegate.completion = continuation
-      streaming.dataTask(with: request).resume()
+    let (bytes, response) = try await session.bytes(for: request)
+    guard let http = response as? HTTPURLResponse else {
+      throw MiddleAIError.invalidResponse("Not HTTP")
     }
+    var raw = Data()
+    var full = ""
+    var finishReason: String?
+    var requestedToolCall = false
+    var sawSSE = false
+    for try await line in bytes.lines {
+      try Task.checkCancellation()
+      guard line.hasPrefix("data:") else {
+        if !sawSSE, raw.count < 1_048_576 {
+          raw.append(contentsOf: line.utf8.prefix(1_048_576 - raw.count))
+          raw.append(0x0A)
+        }
+        continue
+      }
+      sawSSE = true
+      let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+      guard payload != "[DONE]", let data = payload.data(using: .utf8) else { continue }
+      if let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) {
+        if let choice = chunk.choices?.first {
+          if let token = choice.delta?.content, !token.isEmpty {
+            full += token
+            onToken(token)
+          } else if let snapshot = choice.message?.content, !snapshot.isEmpty {
+            full = emitNewContent(snapshot, after: full, onToken: onToken)
+          }
+          requestedToolCall =
+            requestedToolCall || !(choice.delta?.toolCalls ?? []).isEmpty
+            || !(choice.message?.toolCalls ?? []).isEmpty
+          finishReason = choice.finishReason ?? finishReason
+        } else if let token = chunk.data?.content ?? chunk.content, !token.isEmpty {
+          // OpenWebUI-specific chat:completion events carry incremental content here.
+          full += token
+          onToken(token)
+        }
+      }
+    }
+    guard (200..<300).contains(http.statusCode) else {
+      let detail = responseDetail(from: raw)
+      throw StreamingFailure.rejected(status: http.statusCode, detail: detail)
+    }
+    if !full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return .completed(
+        CompletionResult(
+          text: full, finishReason: finishReason, requestedToolCall: requestedToolCall))
+    }
+    if isAsyncTaskResponse(raw) || raw.isEmpty || sawSSE {
+      return .asynchronous
+    }
+    if let result = try? completionResult(from: raw) {
+      onToken(result.text)
+      return .completed(result)
+    }
+    // WebUI-shaped streaming requests may deliberately return an empty acknowledgement and
+    // publish chunks through its socket channel. Polling the persisted assistant is the portable
+    // HTTP fallback and still delivers incremental changes to MiddleAI.
+    return .asynchronous
   }
   private func messageJSON(_ m: Message) -> [String: Any] {
     [
@@ -387,90 +564,6 @@ public final class OpenWebUIClient: OpenWebUIClientProtocol, @unchecked Sendable
       "id": "", "title": title, "models": [model], "messages": messages.map(messageJSON),
       "history": ["messages": history, "currentId": messages.last?.id ?? ""], "params": [:],
     ]
-  }
-}
-
-private final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-  let onToken: @Sendable (String) -> Void
-  var completion: CheckedContinuation<String, Error>?
-  private var buffer = ""
-  private var full = ""
-  private var status = 200
-  private let verify: Bool
-  private let anchor: SecCertificate?
-  init(onToken: @escaping @Sendable (String) -> Void, verify: Bool, caFile: String?) {
-    self.onToken = onToken
-    self.verify = verify
-    if let caFile, let data = try? Data(contentsOf: URL(fileURLWithPath: caFile)) {
-      self.anchor = SecCertificateCreateWithData(nil, data as CFData)
-    } else {
-      self.anchor = nil
-    }
-  }
-  func urlSession(
-    _ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
-    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-  ) {
-    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-      let trust = challenge.protectionSpace.serverTrust
-    else {
-      completionHandler(.performDefaultHandling, nil)
-      return
-    }
-    if !verify {
-      completionHandler(.useCredential, URLCredential(trust: trust))
-      return
-    }
-    if let anchor {
-      SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
-      SecTrustSetAnchorCertificatesOnly(trust, false)
-    }
-    var error: CFError?
-    if SecTrustEvaluateWithError(trust, &error) {
-      completionHandler(.useCredential, URLCredential(trust: trust))
-    } else {
-      completionHandler(.cancelAuthenticationChallenge, nil)
-    }
-  }
-  func urlSession(
-    _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
-    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-  ) {
-    status = (response as? HTTPURLResponse)?.statusCode ?? 0
-    completionHandler(.allow)
-  }
-  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-    buffer += String(decoding: data, as: UTF8.self)
-    while let range = buffer.range(of: "\n") {
-      let line = String(buffer[..<range.lowerBound])
-      buffer.removeSubrange(...range.lowerBound)
-      parse(line)
-    }
-  }
-  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    if let error {
-      completion?.resume(throwing: error)
-    } else if !(200..<300).contains(status) {
-      completion?.resume(throwing: MiddleAIError.network("Open WebUI returned HTTP \(status)"))
-    } else {
-      completion?.resume(returning: full)
-    }
-    completion = nil
-  }
-  private func parse(_ line: String) {
-    guard line.hasPrefix("data:") else { return }
-    let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-    guard payload != "[DONE]", let data = payload.data(using: .utf8),
-      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return }
-    let choice = (root["choices"] as? [[String: Any]])?.first
-    let token =
-      ((choice?["delta"] as? [String: Any])?["content"] as? String)
-      ?? ((choice?["message"] as? [String: Any])?["content"] as? String) ?? ""
-    if !token.isEmpty {
-      full += token
-      onToken(token)
-    }
   }
 }
 

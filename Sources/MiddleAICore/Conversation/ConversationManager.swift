@@ -86,6 +86,19 @@ public final class ConversationManager: @unchecked Sendable {
     return best.0
   }
   public func list() throws -> [Conversation] { try store.recentConversations(limit: 50) }
+  public func cacheStatistics() throws -> ConversationCacheStatistics {
+    try store.cacheStatistics()
+  }
+  public func clearLocalHistory() throws {
+    try store.deleteAllConversations()
+    lock.managerLock { currentID = nil }
+  }
+  public func purgeLocalHistory(olderThan date: Date) throws {
+    try store.deleteConversations(lastUsedBefore: date)
+    if let active = lock.managerLock({ currentID }), try store.conversation(id: active) == nil {
+      lock.managerLock { currentID = nil }
+    }
+  }
   public func activate(_ id: String) throws {
     guard try store.conversation(id: id) != nil else {
       throw MiddleAIError.storage("Conversation no longer exists")

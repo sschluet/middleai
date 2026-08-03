@@ -52,6 +52,21 @@ import MiddleAICore
         return
       }
       let credentials = CompositeCredentialStore()
+      if command == "api-token" {
+        let token = try LocalInputServer.ensureLocalAPIToken(in: credentials)
+        print(token)
+        if !config.api.tokenRequired {
+          print("Note: local HTTP token authentication is disabled in the current configuration.")
+        }
+        return
+      }
+      if command == "api-secure" {
+        config.api.tokenRequired = true
+        try ConfigLoader.save(config)
+        let token = try LocalInputServer.ensureLocalAPIToken(in: credentials)
+        print("Local HTTP token authentication is enabled. Bearer token:\n\(token)")
+        return
+      }
       let engine = try MiddleAIFactory.make(config: config, credentials: credentials)
       switch command {
       case "ask":
@@ -80,7 +95,8 @@ import MiddleAICore
         print("Local TTS model is ready.")
       case "tts-test":
         let sample = TTSVoiceCatalog.germanSample
-        let requestedProvider = args.dropFirst().first?.lowercased() ?? config.tts.provider.lowercased()
+        let requestedProvider =
+          args.dropFirst().first?.lowercased() ?? config.tts.provider.lowercased()
         let requestedVoice = requestedProvider == "voxtral_tts" ? "de_female" : config.tts.voice
         let provider: any TTSProvider
         switch requestedProvider {
@@ -109,7 +125,8 @@ import MiddleAICore
         print("Local \(requestedProvider) synthesis and playback succeeded.")
       case "tts-render":
         let sample = TTSVoiceCatalog.germanSample
-        let destination = args.dropFirst().first.map(URL.init(fileURLWithPath:))
+        let destination =
+          args.dropFirst().first.map(URL.init(fileURLWithPath:))
           ?? ConfigLoader.defaultDirectory.appendingPathComponent("tts-test.wav")
         try FileManager.default.createDirectory(
           at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -131,7 +148,9 @@ import MiddleAICore
             "tts-render supports the local supertonic3 and pockettts providers")
         }
         try audio.write(to: destination, options: .atomic)
-        print("Rendered \(audio.count) bytes of local \(config.tts.provider) audio to \(destination.path)")
+        print(
+          "Rendered \(audio.count) bytes of local \(config.tts.provider) audio to \(destination.path)"
+        )
       case "serve":
         try await engine.client.authenticate()
         let server = LocalInputServer(engine: engine, config: config.api, credentials: credentials)
@@ -153,7 +172,7 @@ import MiddleAICore
   }
   static func usage() {
     print(
-      "Usage: middleai <ask|status|new|stop|conversations|doctor|tts-use-supertonic|tts-use-pocket|tts-prepare|tts-render|tts-test|serve|configure> [text]"
+      "Usage: middleai <ask|status|new|stop|conversations|doctor|api-token|api-secure|tts-use-supertonic|tts-use-pocket|tts-prepare|tts-render|tts-test|serve|configure> [text]"
     )
   }
 }

@@ -65,6 +65,7 @@ enum VoicePhase: Sendable {
 
 private struct VoiceIslandView: View {
   @ObservedObject var model: VoiceOverlayModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     HStack(spacing: 10) {
@@ -91,7 +92,7 @@ private struct VoiceIslandView: View {
     .padding(.horizontal, 20)
     .frame(width: model.islandWidth, height: model.islandHeight, alignment: .center)
     .preferredColorScheme(.dark)
-    .animation(.snappy(duration: 0.14), value: model.phase)
+    .animation(reduceMotion ? nil : .snappy(duration: 0.14), value: model.phase)
   }
 
   @ViewBuilder private var modeIndicator: some View {
@@ -243,6 +244,7 @@ private struct VoiceNotchRootView: View {
 }
 
 private struct IslandWaveform: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let level: Float
   let color: Color
   let active: Bool
@@ -259,7 +261,7 @@ private struct IslandWaveform: View {
           .shadow(color: color.opacity(active ? 0.3 : 0), radius: 1.5)
       }
     }
-    .animation(.easeOut(duration: 0.09), value: level)
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.09), value: level)
   }
 }
 
@@ -312,7 +314,7 @@ private struct IslandWaveform: View {
     panel.alphaValue = 0
     panel.orderFrontRegardless()
     NSAnimationContext.runAnimationGroup { context in
-      context.duration = 0.10
+      context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.10
       context.timingFunction = CAMediaTimingFunction(name: .easeOut)
       panel.animator().alphaValue = 1
     }
@@ -341,16 +343,19 @@ private struct IslandWaveform: View {
 
   private func dismissPanel() {
     guard let panel, panel.isVisible else { return }
-    NSAnimationContext.runAnimationGroup({ context in
-      context.duration = 0.06
-      context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-      panel.animator().alphaValue = 0
-    }) {
-      Task { @MainActor in
-        panel.orderOut(nil)
-        panel.alphaValue = 1
+    NSAnimationContext.runAnimationGroup(
+      { context in
+        context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.06
+        context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        panel.animator().alphaValue = 0
+      },
+      completionHandler: {
+        Task { @MainActor in
+          panel.orderOut(nil)
+          panel.alphaValue = 1
+        }
       }
-    }
+    )
   }
 
   private func panelFrame(on screen: NSScreen) -> NSRect {

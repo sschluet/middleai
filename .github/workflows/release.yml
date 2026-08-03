@@ -24,7 +24,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -40,7 +40,7 @@ jobs:
           swift --version
 
       - name: Restore Swift package cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .build
@@ -49,8 +49,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swift62-
 
+      - name: Lint Swift formatting
+        run: swift format lint --recursive Sources Tests Package.swift
+
+      - name: Audit repository policy
+        run: ./scripts/audit-repository.sh
+
       - name: Run test suite
         run: swift run -c release middleai-tests
+
+      - name: Run structured Swift tests
+        run: swift test -c release
 
       - name: Build application bundle
         env:
@@ -68,9 +77,12 @@ jobs:
         shell: bash
         run: |
           archive="MiddleAI-${RELEASE_TAG}-macOS-arm64.zip"
+          dependencies="MiddleAI-${RELEASE_TAG}-dependencies.json"
+          swift package show-dependencies --format json > "$dependencies"
           ditto -c -k --sequesterRsrc --keepParent dist/MiddleAI.app "$archive"
           shasum -a 256 "$archive" > "$archive.sha256"
           echo "RELEASE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+          echo "RELEASE_DEPENDENCIES=$dependencies" >> "$GITHUB_ENV"
 
       - name: Publish GitHub release
         shell: bash
@@ -78,6 +90,7 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "$RELEASE_ARCHIVE" \
             "$RELEASE_ARCHIVE.sha256" \
+            "$RELEASE_DEPENDENCIES" \
             --repo "$GITHUB_REPOSITORY" \
             --title "MiddleAI $RELEASE_TAG" \
             --generate-notes \

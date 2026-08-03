@@ -2,6 +2,11 @@
 set -euo pipefail
 
 MIDDLEAI_API_URL=${MIDDLEAI_API_URL:-http://127.0.0.1:8765/input}
+MIDDLEAI_API_TOKEN=${MIDDLEAI_API_TOKEN:-}
+if [[ -z "$MIDDLEAI_API_TOKEN" ]]; then
+  MIDDLEAI_API_TOKEN=$(/usr/bin/security find-generic-password \
+    -s de.middleai.openwebui -a local_http_token -w 2>/dev/null || true)
+fi
 if (( $# > 0 )); then
   INPUT_TEXT="$*"
 else
@@ -13,7 +18,13 @@ if [[ -z "$INPUT_TEXT" ]]; then
   exit 64
 fi
 
+auth_args=()
+if [[ -n "$MIDDLEAI_API_TOKEN" ]]; then
+  auth_args=(-H "Authorization: Bearer $MIDDLEAI_API_TOKEN")
+fi
+
 /usr/bin/curl --fail-with-body --silent --show-error \
+  "${auth_args[@]}" \
   -H 'Content-Type: text/plain; charset=utf-8' \
   -H 'X-MiddleAI-Source: fluidvoice' \
   --data-binary "$INPUT_TEXT" "$MIDDLEAI_API_URL"

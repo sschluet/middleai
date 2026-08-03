@@ -16,6 +16,9 @@ public enum InputResult: Sendable, Equatable {
   private var config: AppConfig
   private let logger = MiddleAILogger()
   private let profiles: ProfileStore
+  private var activeRequest: Task<String, Error>?
+  private var activeRequestID: UUID?
+  private var activeChatID: String?
   public private(set) var activeProfile: String
   public init(
     manager: ConversationManager, client: any OpenWebUIClientProtocol, ttsQueue: TTSQueue,
@@ -30,6 +33,7 @@ public enum InputResult: Sendable, Equatable {
     self.pipeline = ResponsePipeline(queue: ttsQueue, mode: config.spokenResponseMode)
   }
   public func handle(text: String, source: String = "unknown") async throws -> InputResult {
+    cancelActiveRequest()
     pipeline.interrupt()
     logger.event("input_received", metadata: ["source": source, "length": "\(text.count)"])
     if let command = detector.detect(text) {
@@ -77,11 +81,15 @@ public enum InputResult: Sendable, Equatable {
     }
     let requestStarted = Date()
     logger.event("openwebui_request_started")
+    let requestID = UUID()
+    activeRequestID = requestID
+    activeChatID = chatID
     let (tokens, tokenContinuation) = AsyncStream<String>.makeStream()
     let tokenDelivery = Task { @MainActor [weak self] in
       var first = true
       for await token in tokens {
         guard let self else { return }
+        guard self.activeRequestID == requestID else { return }
         if first {
           first = false
           self.logger.event(
@@ -94,16 +102,39 @@ public enum InputResult: Sendable, Equatable {
       }
     }
     let response: String
-    do {
-      response = try await client.send(messages: requestMessages, chatID: chatID, model: model) {
-        token in
+    let client = client
+    let requestTask = Task {
+      try await client.send(messages: requestMessages, chatID: chatID, model: model) { token in
         tokenContinuation.yield(token)
+      }
+    }
+    activeRequest = requestTask
+    activeRequestID = requestID
+    defer {
+      if activeRequestID == requestID {
+        activeRequest = nil
+        activeRequestID = nil
+        activeChatID = nil
+      }
+    }
+    do {
+      response = try await withTaskCancellationHandler {
+        try await requestTask.value
+      } onCancel: {
+        requestTask.cancel()
       }
       tokenContinuation.finish()
       await tokenDelivery.value
     } catch {
       tokenContinuation.finish()
       tokenDelivery.cancel()
+      if requestTask.isCancelled || Task.isCancelled
+        || (error as? URLError)?.code == .cancelled
+      {
+        if activeRequestID == requestID { pipeline.interrupt() }
+        logger.event("openwebui_request_cancelled")
+        throw CancellationError()
+      }
       ttsQueue.enqueue("Open WebUI ist momentan nicht erreichbar.")
       logger.error("openwebui_request_failed")
       throw error
@@ -131,7 +162,18 @@ public enum InputResult: Sendable, Equatable {
     return .response(response, conversationID: conversation.id)
   }
   public func interrupt() {
+    cancelActiveRequest()
     pipeline.interrupt()
+  }
+  private func cancelActiveRequest() {
+    activeRequest?.cancel()
+    activeRequest = nil
+    activeRequestID = nil
+    if let chatID = activeChatID {
+      let client = client
+      Task { await client.cancel(chatID: chatID) }
+    }
+    activeChatID = nil
   }
   private var model: String {
     let profileModel = profiles.profiles[activeProfile]?.model ?? ""
@@ -185,7 +227,8 @@ public enum InputResult: Sendable, Equatable {
     return (components.string ?? rawURL).lowercased()
   }
 
-  nonisolated public static func removingUnansweredUserSuffix(from messages: [Message]) -> [Message] {
+  nonisolated public static func removingUnansweredUserSuffix(from messages: [Message]) -> [Message]
+  {
     var result = messages
     while result.last?.role == .user { result.removeLast() }
     return result
@@ -217,10 +260,12 @@ public enum MiddleAIFactory {
     guard let url = URL(string: config.openwebui.url) else {
       throw MiddleAIError.configuration("Invalid Open WebUI URL")
     }
+    let scopedCredentials = ScopedCredentialStore(
+      base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
     let auth: any AuthProvider =
       config.openwebui.authMethod == "api_key"
-      ? APIKeyAuthProvider(credentials: credentials)
-      : PasswordAuthProvider(username: config.openwebui.username, credentials: credentials)
+      ? APIKeyAuthProvider(credentials: scopedCredentials)
+      : PasswordAuthProvider(username: config.openwebui.username, credentials: scopedCredentials)
     let client = OpenWebUIClient(
       baseURL: url, auth: auth, tlsVerify: config.openwebui.tlsVerify,
       caFile: config.openwebui.caFile)

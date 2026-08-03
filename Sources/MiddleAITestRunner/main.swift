@@ -36,13 +36,16 @@ struct FixedRouter: ConversationRoutingStrategy {
     var passed = 0
     var failed = 0
     let tests: [(String, () async throws -> Void)] = [
-      ("Config", testConfig), ("Storage", testStorage), ("Commands", testCommands),
+      ("Config", testConfig), ("Security primitives", testSecurityPrimitives),
+      ("Local HTTP parser", testLocalHTTPParser), ("Storage", testStorage),
+      ("Commands", testCommands),
       ("SentenceBuffer", testSentenceBuffer), ("Speech text", testSpeechText),
       ("Dictation formatting", testDictationFormatting),
       ("HeuristicRouter continuation", testRouterContinuation),
       ("HeuristicRouter new topic", testRouterNewTopic), ("HybridRouter", testHybrid),
       ("ConversationManager", testManager), ("Confidence management", testConfidence),
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
+      ("OpenWebUI cancellation", testResponseCancellation),
       ("OpenWebUI adapter", testAdapter),
     ]
     for (name, test) in tests {
@@ -69,7 +72,11 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.localLLM.url = "http://127.0.0.1:18881"
     c.hotkeys.dictation = "left_control"
     c.hotkeys.assistant = "right_command"
-    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(c))
+    c.tts.localCommand = "/tmp/model #1/\"voice\""
+    c.privacy.localCacheRetentionDays = 365
+    let rendered = ConfigLoader.renderYAML(c)
+    let parsed = try ConfigLoader.parseYAML(rendered)
+    try expect(rendered.contains("\"schema_version\" : 1"), "configuration schema version")
     try expect(parsed.openwebui.url == "https://ai.internal", "URL round-trip")
     try expect(parsed.openwebui.tlsVerify, "TLS default")
     try expect(parsed.tts.localOnly, "local TTS")
@@ -95,11 +102,15 @@ struct FixedRouter: ConversationRoutingStrategy {
       "Ollama v1 endpoint normalization")
     let routed = try JSONDecoder().decode(
       RoutingDecision.self,
-      from: Data(#"{"decision":"switch_chat","chat_id":"abc","confidence":0.9,"reason":"match"}"#.utf8))
+      from: Data(
+        #"{"decision":"switch_chat","chat_id":"abc","confidence":0.9,"reason":"match"}"#.utf8))
     try expect(routed.chatID == "abc", "local router snake-case chat ID")
     try expect(
       parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command",
       "activation keys round-trip")
+    try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
+    try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
+    try expect(AppConfig().api.tokenRequired, "secure API default")
     try expect(
       TTSVoiceCatalog.supertonicVoices.count == 5
         && TTSVoiceCatalog.supertonicVoices.allSatisfy(\.isFemale),
@@ -113,18 +124,140 @@ struct FixedRouter: ConversationRoutingStrategy {
         && TTSVoiceCatalog.voxtralVoices.allSatisfy(\.isFemale)
         && TTSVoiceCatalog.defaultVoice(for: "voxtral_tts") == "de_female",
       "female Voxtral voice catalog")
-    let unsafe = ConfigLoader.renderYAML(c).replacingOccurrences(
-      of: "bind: \"127.0.0.1\"", with: "bind: \"0.0.0.0\"")
+    var unsafeConfig = c
+    unsafeConfig.api.bind = "0.0.0.0"
     do {
-      _ = try ConfigLoader.parseYAML(unsafe)
+      _ = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(unsafeConfig))
       throw TestFailure.failed("unsafe listener accepted")
     } catch is MiddleAIError {}
-    let conflictingKeys = ConfigLoader.renderYAML(c).replacingOccurrences(
-      of: "assistant: \"right_command\"", with: "assistant: \"left_control\"")
+    var conflictingConfig = c
+    conflictingConfig.hotkeys.assistant = conflictingConfig.hotkeys.dictation
     do {
-      _ = try ConfigLoader.parseYAML(conflictingKeys)
+      _ = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(conflictingConfig))
       throw TestFailure.failed("conflicting activation keys accepted")
     } catch is MiddleAIError {}
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let legacyURL = directory.appendingPathComponent("config.yaml")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let legacy = """
+      openwebui:
+        url: "https://ai.example/path#fragment"
+        model: "model:one"
+      tts:
+        local_only: true
+      hotkeys:
+        dictation: "left_option"
+        assistant: "right_option"
+      api:
+        bind: "127.0.0.1"
+        token_required: false
+      """
+    try Data(legacy.utf8).write(to: legacyURL)
+    let migrated = try ConfigLoader.load(from: legacyURL)
+    try expect(migrated.openwebui.url.hasSuffix("#fragment"), "quoted legacy comment migration")
+    try expect(!migrated.api.tokenRequired, "legacy API authentication compatibility")
+    let migratedText = try String(contentsOf: legacyURL, encoding: .utf8)
+    try expect(migratedText.contains("\"schema_version\""), "legacy configuration rewritten")
+    try expect(
+      FileManager.default.fileExists(
+        atPath: legacyURL.appendingPathExtension("legacy-backup").path),
+      "legacy configuration backup")
+    let mode =
+      try FileManager.default.attributesOfItem(atPath: legacyURL.path)[.posixPermissions]
+      as? NSNumber
+    try expect((mode?.intValue ?? 0) & 0o777 == 0o600, "configuration file permissions")
+
+    do {
+      _ = try ConfigLoader.parseYAML("api:\n  token_required: perhaps\n")
+      throw TestFailure.failed("invalid legacy boolean accepted")
+    } catch is MiddleAIError {}
+  }
+
+  @MainActor static func testSecurityPrimitives() async throws {
+    let base = MemoryCredentialStore()
+    try base.save("first", account: "password")
+    let serverA = ScopedCredentialStore(
+      base: base, baseURL: "https://AI.example/", profile: "Default")
+    let serverB = ScopedCredentialStore(
+      base: base, baseURL: "https://other.example", profile: "default")
+    let first = try serverA.read(account: "password")
+    let removedLegacy = try base.read(account: "password")
+    let persisted = try base.read(account: serverA.scopedAccount(for: "password"))
+    try expect(first == "first", "legacy credential migration")
+    try expect(removedLegacy == nil, "legacy credential removed")
+    try expect(
+      persisted == "first", "scoped credential persisted")
+    try base.save("updated", account: "password")
+    let updated = try serverA.read(account: "password")
+    let isolated = try serverB.read(account: "password")
+    try expect(updated == "updated", "legacy UI update migrated")
+    try expect(isolated == nil, "server credentials isolated")
+    try base.save("second-server", account: "password")
+    let second = try serverB.read(account: "password")
+    let retained = try serverA.read(account: "password")
+    try expect(second == "second-server", "second scope migrated")
+    try expect(retained == "updated", "first scope retained")
+
+    let localToken = try LocalInputServer.ensureLocalAPIToken(in: base)
+    let repeatedToken = try LocalInputServer.ensureLocalAPIToken(in: base)
+    let unrelatedAPIToken = try base.read(account: "api_token")
+    try expect(
+      localToken.count >= 40 && repeatedToken == localToken, "stable random local API token")
+    try expect(
+      unrelatedAPIToken == nil,
+      "local and OpenWebUI API tokens use separate accounts")
+
+    let safe = MiddleAILogger.sanitizedMetadata([
+      "source": "voice-assistant", "latency_ms": "42", "email": "person@example.test",
+      "prompt": "secret", "request_id": "invalid value with spaces",
+    ])
+    try expect(safe == ["source": "voice-assistant", "latency_ms": "42"], "log allow-list")
+  }
+
+  static func testLocalHTTPParser() async throws {
+    let body = Data(#"{"text":"Hallo"}"#.utf8)
+    let request =
+      Data(
+        "POST /input HTTP/1.1\r\nHost: localhost\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
+      + body
+    switch LocalHTTPRequest.parse(request) {
+    case .complete(let parsed):
+      try expect(parsed.method == "POST" && parsed.path == "/input", "HTTP request line")
+      try expect(parsed.body == body, "HTTP body")
+    default: throw TestFailure.failed("valid local HTTP request rejected")
+    }
+    let partial = request.dropLast()
+    if case .incomplete = LocalHTTPRequest.parse(Data(partial)) {
+    } else {
+      throw TestFailure.failed("partial HTTP request accepted")
+    }
+    if case .tooLarge(.header) = LocalHTTPRequest.parse(
+      Data(repeating: 65, count: 20), maximumHeaderBytes: 16, maximumBodyBytes: 100)
+    {
+    } else {
+      throw TestFailure.failed("oversized HTTP header accepted")
+    }
+    let oversized = Data("POST /input HTTP/1.1\r\nContent-Length: 5\r\n\r\n12345".utf8)
+    if case .tooLarge(.body) = LocalHTTPRequest.parse(
+      oversized, maximumHeaderBytes: 100, maximumBodyBytes: 4)
+    {
+    } else {
+      throw TestFailure.failed("oversized HTTP body accepted")
+    }
+    let duplicate = Data(
+      "GET /health HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n".utf8)
+    if case .invalid = LocalHTTPRequest.parse(duplicate) {
+    } else {
+      throw TestFailure.failed("duplicate HTTP header accepted")
+    }
+    let chunked = Data(
+      "POST /input HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)
+    if case .invalid = LocalHTTPRequest.parse(chunked) {
+    } else {
+      throw TestFailure.failed("chunked HTTP body accepted")
+    }
   }
   static func testStorage() async throws {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -140,8 +273,13 @@ struct FixedRouter: ConversationRoutingStrategy {
     let savedConversation = try store.conversation(id: c.id)
     let savedMessages = try store.messages(conversationID: c.id, limit: 10)
     try expect(savedConversation?.title == "Pumps", "conversation persistence")
-    try expect(savedConversation?.openWebUIBaseURL == "https://ai.example", "remote scope persistence")
+    try expect(
+      savedConversation?.openWebUIBaseURL == "https://ai.example", "remote scope persistence")
     try expect(savedMessages.first?.content == "Gardena", "message persistence")
+    let mode =
+      try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions]
+      as? NSNumber
+    try expect((mode?.intValue ?? 0) & 0o777 == 0o600, "SQLite file permissions")
   }
   static func testCommands() async throws {
     let d = CommandDetector()
@@ -161,14 +299,21 @@ struct FixedRouter: ConversationRoutingStrategy {
     let decimal = SpeechTextProcessor.normalizeGermanNumbers(in: "3,5 Millionen Datensätze")
     try expect(decimal == "drei Komma fünf Millionen Datensätze", "German decimal spelling")
     let grouped = SpeechTextProcessor.normalizeGermanNumbers(in: "Das sind 1.250.000 Einträge.")
-    try expect(!grouped.contains("1.250.000") && grouped.contains("Million"), "grouped number spelling")
+    try expect(
+      !grouped.contains("1.250.000") && grouped.contains("Million"), "grouped number spelling")
     let segments = SpeechTextProcessor.segments(
       for: "Der Python Workflow verarbeitet 3,5 Millionen Datensätze.")
-    try expect(segments.contains(where: { $0.language == .english && $0.text.contains("Python") }), "English pronunciation segment")
-    try expect(segments.contains(where: { $0.language == .german && $0.text.contains("drei Komma fünf") }), "German number segment")
+    try expect(
+      segments.contains(where: { $0.language == .english && $0.text.contains("Python") }),
+      "English pronunciation segment")
+    try expect(
+      segments.contains(where: { $0.language == .german && $0.text.contains("drei Komma fünf") }),
+      "German number segment")
     let prepared = SpeechTextProcessor.speechReadyGermanText(
       "**Python Workflow:** 3,5 Millionen Datensätze")
-    try expect(!prepared.contains("**") && prepared.contains("Peiton Wörkfloh"), "continuous German pronunciation preparation")
+    try expect(
+      !prepared.contains("**") && prepared.contains("Peiton Wörkfloh"),
+      "continuous German pronunciation preparation")
     try expect(
       SpeechTextProcessor.prefersPreciseGermanVoice("Das Ergebnis beträgt 3,5 Millionen."),
       "numbers prefer precise German voice")
@@ -191,7 +336,8 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(
       paragraphs.plainText == "Hallo\nSebastian\n\nViele Grüße",
       "spoken line and paragraph commands")
-    try expect(paragraphs.html.contains("<br>") && paragraphs.html.contains("<p>"), "HTML paragraphs")
+    try expect(
+      paragraphs.html.contains("<br>") && paragraphs.html.contains("<p>"), "HTML paragraphs")
 
     let quote = DictationFormatter.format(
       "Das Projekt heißt in Anführungsstrichen Apollo.")
@@ -201,7 +347,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       "Aufzählung Punkt eins Analyse nächster Punkt Umsetzung Liste Ende")
     try expect(
       bullets.plainText == "• Analyse\n• Umsetzung" && bullets.html.contains("<ul>"),
-      "spoken bullet list")
+      "spoken bullet list: \(bullets.plainText)")
 
     let numbered = DictationFormatter.format(
       "Nummerierte Liste Punkt eins Recherche nächster Punkt Entscheidung Liste Ende")
@@ -210,12 +356,21 @@ struct FixedRouter: ConversationRoutingStrategy {
       "spoken numbered list")
 
     let naturalEnumeration = DictationFormatter.format(
-      "Hierfür folgende Aufzählungspunkte. Aufzählung: 1. KI-Innovation, zweitens Datenklassifizierung und drittens Backup-Konzept.")
+      "Hierfür folgende Aufzählungspunkte. Aufzählung: 1. KI-Innovation, zweitens Datenklassifizierung und drittens Backup-Konzept."
+    )
     try expect(
       naturalEnumeration.plainText
         == "Hierfür folgende Aufzählungspunkte.\n\n• KI-Innovation\n• Datenklassifizierung\n• Backup-Konzept.",
       "number and ordinal list markers: \(naturalEnumeration.plainText)")
     try expect(naturalEnumeration.html.contains("<ul>"), "natural enumeration HTML list")
+
+    let multipleLists = DictationFormatter.format(
+      "Aufzählung Punkt eins Analyse Punkt zwei Umsetzung Liste Ende neuer Absatz "
+        + "Aufzählung Punkt eins Test Punkt zwei Freigabe Liste Ende")
+    try expect(
+      multipleLists.plainText.contains("• Analyse\n• Umsetzung")
+        && multipleLists.plainText.contains("• Test\n• Freigabe"),
+      "multiple spoken lists: \(multipleLists.plainText)")
 
     let punctuation = DictationFormatter.format(
       "Hallo Komma Sebastian Doppelpunkt alles gut Fragezeichen")
@@ -224,8 +379,14 @@ struct FixedRouter: ConversationRoutingStrategy {
       "explicit punctuation commands")
 
     let ordinary = DictationFormatter.format("Die neue Zeile ist rot.")
-    try expect(!ordinary.didApplyFormatting && ordinary.plainText == "Die neue Zeile ist rot.",
+    try expect(
+      !ordinary.didApplyFormatting && ordinary.plainText == "Die neue Zeile ist rot.",
       "ordinary wording is preserved")
+    let literalPunctuation = DictationFormatter.format("Das Wort Komma ist ein Substantiv.")
+    try expect(
+      !literalPunctuation.didApplyFormatting
+        && literalPunctuation.plainText == "Das Wort Komma ist ein Substantiv.",
+      "literal punctuation word is preserved")
   }
   static func testRouterContinuation() async throws {
     let now = Date()
@@ -309,6 +470,29 @@ struct FixedRouter: ConversationRoutingStrategy {
       provider.spoken == ["Erster Satz. Zweiter Satz."],
       "complete response spoken as one continuous utterance")
   }
+  @MainActor static func testResponseCancellation() async throws {
+    let queue = TTSQueue(provider: RecordingTTS())
+    let manager = ConversationManager(
+      store: InMemoryConversationStore(),
+      router: FixedRouter(
+        result: RoutingDecision(decision: .newChat, confidence: 0.9, reason: "test")))
+    var config = AppConfig()
+    config.openwebui.model = "test-model"
+    let client = SlowResponseClient()
+    let engine = MiddleAIEngine(
+      manager: manager, client: client, ttsQueue: queue, config: config)
+    let request = Task { try await engine.handle(text: "Lange Frage", source: "test") }
+    try await Task.sleep(for: .milliseconds(20))
+    engine.interrupt()
+    do {
+      _ = try await request.value
+      throw TestFailure.failed("active OpenWebUI request was not cancelled")
+    } catch is CancellationError {
+      // Expected: interrupting the engine cancels the network generation, not just speech.
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    try expect(client.cancelledChatID == "test-chat", "OpenWebUI background task stopped")
+  }
   static func testAdapter() async throws {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [MockProtocol.self]
@@ -330,9 +514,11 @@ struct FixedRouter: ConversationRoutingStrategy {
     let models = try await client.models()
     try expect(models == ["local-model"], "model parsing")
     var finalized = false
+    let streamedTokens = LockedTokens()
     MockProtocol.handler = { request in
       if request.url?.path == "/api/chat/completions" {
         let body = try requestJSON(request)
+        try expect(body["stream"] as? Bool == true, "streaming requested")
         let features = body["features"] as? [String: Bool]
         try expect(features?["web_search"] == true, "model web-search capability forwarded")
         try expect(body["tool_ids"] as? [String] == ["calculator"], "model tools forwarded")
@@ -341,7 +527,7 @@ struct FixedRouter: ConversationRoutingStrategy {
         return (
           200,
           Data(
-            "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"API Antwort\"}}]}"
+            "data: {\"choices\":[{\"delta\":{\"content\":\"API \"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"Antwort\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
               .utf8)
         )
       }
@@ -350,7 +536,9 @@ struct FixedRouter: ConversationRoutingStrategy {
         let body = try requestJSON(request)
         let background = body["background_tasks"] as? [String: Bool]
         try expect(background?["title_generation"] == true, "title starts after completion")
-        return (200, Data("{\"message\":{\"role\":\"assistant\",\"content\":\"API Antwort final\"}}".utf8))
+        return (
+          200, Data("{\"message\":{\"role\":\"assistant\",\"content\":\"API Antwort final\"}}".utf8)
+        )
       }
       try expect(request.url?.path == "/api/v1/chats/test-chat", "chat update endpoint")
       return (200, Data("{}".utf8))
@@ -358,9 +546,11 @@ struct FixedRouter: ConversationRoutingStrategy {
     let reply = try await client.send(
       messages: [Message(role: .user, content: "Test")], chatID: "test-chat",
       model: "local-model"
-    ) { _ in }
+    ) { streamedTokens.append($0) }
     try expect(reply == "API Antwort final", "completion outlet response parsing")
+    try expect(streamedTokens.values == ["API ", "Antwort"], "SSE tokens delivered incrementally")
     try expect(finalized, "completion lifecycle finalized")
+    let asyncTokens = LockedTokens()
     MockProtocol.handler = { request in
       if request.url?.path == "/api/chat/completions" {
         return (200, Data("{\"status\":true,\"task_ids\":[\"task-1\"]}".utf8))
@@ -382,8 +572,39 @@ struct FixedRouter: ConversationRoutingStrategy {
     let asyncReply = try await client.send(
       messages: [Message(role: .user, content: "Test")], chatID: "test-chat",
       model: "local-model"
-    ) { _ in }
+    ) { asyncTokens.append($0) }
     try expect(asyncReply == "Asynchrone Antwort", "asynchronous response polling")
+    try expect(
+      asyncTokens.values == ["Asynchrone Antwort"], "polled response delivered incrementally")
+
+    let fallbackTokens = LockedTokens()
+    let completionAttempts = LockedCounter()
+    MockProtocol.handler = { request in
+      if request.url?.path == "/api/chat/completions" {
+        let attempt = completionAttempts.increment()
+        let body = try requestJSON(request)
+        if attempt == 1 {
+          try expect(body["stream"] as? Bool == true, "stream tried before fallback")
+          return (422, Data("{\"detail\":\"stream unsupported\"}".utf8))
+        }
+        try expect(body["stream"] as? Bool == false, "non-streaming compatibility fallback")
+        return (
+          200,
+          Data(
+            "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"Fallback Antwort\"}}]}"
+              .utf8)
+        )
+      }
+      if request.url?.path == "/api/chat/completed" { return (200, Data("{}".utf8)) }
+      return (200, Data("{}".utf8))
+    }
+    let fallbackReply = try await client.send(
+      messages: [Message(role: .user, content: "Test")], chatID: "test-chat",
+      model: "local-model"
+    ) { fallbackTokens.append($0) }
+    try expect(fallbackReply == "Fallback Antwort", "non-streaming fallback response")
+    try expect(fallbackTokens.values == ["Fallback Antwort"], "fallback content delivered once")
+    try expect(completionAttempts.value == 2, "streaming rejection retried exactly once")
   }
 }
 
@@ -423,8 +644,79 @@ struct FixedResponseClient: OpenWebUIClientProtocol {
   func listChats() async throws -> [(id: String, title: String)] { [] }
   func chatURL(id: String) -> URL { URL(string: "https://example.test/c/\(id)")! }
 }
+final class SlowResponseClient: OpenWebUIClientProtocol, @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancelled: String?
+  var cancelledChatID: String? { lock.withLock { cancelled } }
+  func authenticate() async throws {}
+  func health() async throws {}
+  func models() async throws -> [String] { ["test-model"] }
+  func createChat(title: String, messages: [Message], model: String) async throws -> String {
+    "test-chat"
+  }
+  func send(
+    messages: [Message], chatID: String, model: String,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async throws -> String {
+    try await Task.sleep(for: .seconds(30))
+    return "unexpected"
+  }
+  func cancel(chatID: String) async {
+    lock.withLock { cancelled = chatID }
+  }
+  func listChats() async throws -> [(id: String, title: String)] { [] }
+  func chatURL(id: String) -> URL { URL(string: "https://example.test/c/\(id)")! }
+}
+final class LockedTokens: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [String] = []
+  var values: [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return storage
+  }
+  func append(_ token: String) {
+    lock.lock()
+    storage.append(token)
+    lock.unlock()
+  }
+}
+final class LockedCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage = 0
+  var value: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return storage
+  }
+  func increment() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    storage += 1
+    return storage
+  }
+}
+final class MemoryCredentialStore: CredentialStore, @unchecked Sendable {
+  private let lock = NSLock()
+  private var values: [String: String] = [:]
+  func save(_ value: String, account: String) throws {
+    lock.lock()
+    values[account] = value
+    lock.unlock()
+  }
+  func read(account: String) throws -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return values[account]
+  }
+  func delete(account: String) throws {
+    lock.lock()
+    values.removeValue(forKey: account)
+    lock.unlock()
+  }
+}
 final class MockProtocol: URLProtocol, @unchecked Sendable {
-  static var handler: ((URLRequest) throws -> (Int, Data))?
+  nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, Data))?
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum MiddleAIIconProvider {
+@MainActor enum MiddleAIIconProvider {
   static var image: NSImage {
     if let url = Bundle.main.resourceURL?.appendingPathComponent("MiddleAI-AppIcon.png"),
       let image = NSImage(contentsOf: url)

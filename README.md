@@ -17,7 +17,7 @@ Ready-to-run Apple Silicon builds are available under [GitHub Releases](https://
 
 The current development releases are ad-hoc signed but not yet Developer-ID signed or notarized. On first launch, macOS can therefore require right-clicking `MiddleAI.app` and choosing **Open**. Microphone and Accessibility permissions, OpenWebUI credentials and local speech models must be configured separately on every Mac.
 
-Each release includes a SHA-256 checksum file. Models are downloaded on first use and are never included in the release archive.
+Each release includes a SHA-256 checksum file and a machine-readable Swift dependency inventory. Models are downloaded on first use and are never included in the release archive.
 
 ## What is included
 
@@ -28,7 +28,7 @@ Each release includes a SHA-256 checksum file. Models are downloaded on first us
 - Silent dismissal for accidental, too-short or empty Option-key recordings
 - Optional on-device dictation polishing with Apple Intelligence to remove filler words, repetitions and slips before insertion
 - Conservative spoken formatting commands for configurable target applications, including paragraphs, line breaks, German quotation marks, punctuation and rich lists
-- Clipboard-preserving insertion into the previously active text field
+- Accessibility-based plain-text insertion with an app-tuned, clipboard-preserving rich-text fallback
 - Shared Swift core plus `middleai` CLI
 - Loopback-only synchronous `POST /input` plus queued `POST /command` for optional local integrations
 - SQLite conversation/message cache and profile state
@@ -36,7 +36,7 @@ Each release includes a SHA-256 checksum file. Models are downloaded on first us
 - Password and API-key auth providers; passwords/tokens live in macOS Keychain
 - Open WebUI adapter with TLS validation, optional private CA, chat persistence and SSE streaming
 - Supertonic 3 multilingual TTS with native Core ML inference, automatic German/English pronunciation, spoken German number normalization, five female voices, 44.1-kHz audio, local macOS fallback and immediate barge-in
-- Structured privacy-safe logging and `middleai doctor`
+- Structured privacy-safe logging, in-app diagnostics, redacted support export and `middleai doctor`
 
 ## Install and build
 
@@ -62,7 +62,9 @@ open dist/MiddleAI.app
 
 The setup builds an ad-hoc signed local `.app`, places the CLI at `dist/bin/middleai`, and creates `~/.middleai/config.yaml`. Nothing is installed system-wide.
 
-The first launch downloads the Parakeet Core ML STT model and the selected TTS model once. Both run locally after those downloads. Settings → Speech shows the installed state, actual local size and live approximate download progress for every managed TTS model. Installed or partial TTS model downloads can be moved to the macOS Trash from the same list; MiddleAI never deletes the shared managed runtime with an individual voice model.
+The first launch downloads the Parakeet Core ML STT model and the selected TTS model once. Both run locally after those downloads. Settings → Speech shows download progress plus installed, incomplete, repair-required and locally updated states for every managed TTS model. Model manifests record the source, exact downloaded revision, license, expected artifacts, runtime versions and the last successful startup. Installed or partial downloads can be repaired, updated or moved to the macOS Trash; MiddleAI never deletes the shared managed runtime with an individual voice model. Managed Python runtime packages are pinned to exact versions and SHA-256 hashes; installation fails closed when a downloaded wheel does not match the lock file.
+
+Voxtral remains available only after an explicit CC BY-NC 4.0 acknowledgement. If an older configuration selects Voxtral without that acknowledgement, MiddleAI safely switches to the local macOS voice. This is intended to prevent accidental business use of a non-commercial model.
 
 ### Local intelligence and chat routing
 
@@ -131,7 +133,7 @@ MiddleAI can translate explicit German structure commands into formatted output.
 - Starting with `nummerierte Liste` creates an ordered list.
 - Spoken `Komma`, `Doppelpunkt`, `Semikolon`, `Fragezeichen`, `Ausrufezeichen` and `Satzende` are converted conservatively.
 
-MiddleAI places plain text, HTML and RTF representations on the clipboard for selected targets so rich editors can preserve lists and paragraphs. The previous clipboard contents are restored afterwards. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
+For plain text MiddleAI first writes directly into the focused accessibility element, leaving the clipboard untouched. Rich output uses app-specific timing and places plain text, HTML and RTF representations on the clipboard so Word, PowerPoint, Outlook and Proton Mail can preserve lists and paragraphs. The previous clipboard contents are restored afterwards. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
 
 The password is written to Keychain service `de.middleai.openwebui`, never to YAML. For development only, `MIDDLEAI_OPENWEBUI_PASSWORD` may be set from a gitignored `.env`-style shell environment.
 
@@ -149,6 +151,8 @@ dist/bin/middleai tts-use-pocket
 dist/bin/middleai tts-prepare
 dist/bin/middleai tts-render ~/.middleai/tts-test.wav
 dist/bin/middleai tts-test
+dist/bin/middleai api-secure
+dist/bin/middleai api-token
 dist/bin/middleai serve
 ```
 
@@ -158,19 +162,20 @@ dist/bin/middleai serve
 
 ```sh
 curl http://127.0.0.1:8765/input \
+  -H "Authorization: Bearer $(dist/bin/middleai api-token)" \
   -H 'Content-Type: application/json' \
   -d '{"text":"Und wie sieht es mit Gardena aus?","source":"fluidvoice"}'
 ```
 
-The server refuses configuration on `0.0.0.0`. An optional local bearer token can be enabled in configuration and stored under the Keychain account `api_token`.
+The server refuses configuration on `0.0.0.0`. New installations require a random local bearer token by default. It is stored separately from OpenWebUI credentials under the Keychain account `local_http_token`. Existing configurations keep their explicit setting; `middleai api-secure` enables authentication and prints the token. The bundled `middleai-input` and `middleai-ask` scripts read that token from Keychain automatically.
 
-`POST /command` remains available for optional local automation and returns `202 Accepted` immediately. It is not used by either native Voice mode.
+`POST /command` remains available for optional local automation and returns `202 Accepted` plus a request ID immediately. `GET /requests/{id}` reports its state and `POST /requests/{id}/cancel` cancels queued or active work. `/health` provides a content-free readiness check. Request size, timeout, concurrency and queue depth are bounded. These endpoints are not used by either native Voice mode.
 
 ## Conversation routing
 
 Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and optionally asks an OpenAI-compatible local routing model. If that model is unavailable, the heuristic path remains operational.
 
-The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`.
+The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
 
 ## TTS and privacy
 
@@ -189,7 +194,9 @@ make test
 dist/bin/middleai doctor
 ```
 
-The test runner covers configuration, SQLite, command detection, sentence parsing, heuristic/hybrid routing, confidence management, conversation management, TTS queue/barge-in and the Open WebUI adapter. It is framework-independent because the standalone Command Line Tools installation used here ships neither an importable XCTest nor Swift Testing module for its compatible SDK.
+The portable test runner covers configuration migration and permissions, HTTP parsing and security, SQLite, command detection, formatting, routing, TTS queue/barge-in, OpenWebUI streaming, fallback and cancellation. An additional XCTest target provides structured IDE/CI reporting and coverage when a full Xcode toolchain is available. Standalone Command Line Tools can continue to use `make test` because that environment does not ship an importable XCTest module.
+
+Settings → Diagnose checks permissions, configuration rights, disk space, local API protection, the selected OpenWebUI model and connection. Its support report deliberately omits credentials, prompts and responses and redacts server URLs. Settings → Hilfe can inspect and delete the local routing cache without deleting canonical conversations in OpenWebUI. The cache defaults to a 90-day retention period; 30 days, one year or permanent local retention can be selected there.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [DEVELOPMENT.md](DEVELOPMENT.md) and [FLUIDVOICE.md](FLUIDVOICE.md) for migration notes.
 

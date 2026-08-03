@@ -1,4 +1,5 @@
 import AVFoundation
+import ApplicationServices
 import Foundation
 
 public struct DiagnosticCheck: Sendable {
@@ -20,12 +21,51 @@ public struct Doctor: Sendable {
     checks.append(
       DiagnosticCheck(
         "Configuration", (try? ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))) != nil))
-    let dbPath = ConfigLoader.defaultDirectory.appendingPathComponent("doctor.sqlite").path
+    let diagnosticDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "middleai-doctor-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: diagnosticDirectory) }
+    let dbPath = diagnosticDirectory.appendingPathComponent("doctor.sqlite").path
     checks.append(DiagnosticCheck("SQLite", (try? SQLiteConversationStore(path: dbPath)) != nil))
+    checks.append(permissionCheck(for: ConfigLoader.defaultDirectory, expected: 0o700))
+    if FileManager.default.fileExists(atPath: ConfigLoader.defaultURL.path) {
+      checks.append(permissionCheck(for: ConfigLoader.defaultURL, expected: 0o600))
+    }
+    checks.append(
+      DiagnosticCheck(
+        "Mikrofonberechtigung",
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+        microphonePermissionDescription))
+    checks.append(
+      DiagnosticCheck(
+        "Bedienungshilfen", AXIsProcessTrusted(),
+        AXIsProcessTrusted() ? "Freigegeben" : "In den macOS-Systemeinstellungen freigeben"))
+    checks.append(
+      DiagnosticCheck(
+        "Eingabeüberwachung", CGPreflightListenEventAccess(),
+        CGPreflightListenEventAccess()
+          ? "Freigegeben" : "In den macOS-Systemeinstellungen freigeben"))
+    if let values = try? ConfigLoader.defaultDirectory.resourceValues(forKeys: [
+      .volumeAvailableCapacityForImportantUsageKey
+    ]), let free = values.volumeAvailableCapacityForImportantUsage {
+      let gigabytes = Double(free) / 1_000_000_000
+      checks.append(
+        DiagnosticCheck(
+          "Freier Speicher", gigabytes >= 5,
+          String(format: "%.1f GB verfügbar", gigabytes)))
+    }
+    let endpoint = URL(string: config.openwebui.url)
+    let secureEndpoint =
+      endpoint?.scheme?.lowercased() == "https" || endpoint?.host?.isLoopback == true
+    checks.append(
+      DiagnosticCheck(
+        "Sicherer OpenWebUI-Endpunkt", secureEndpoint,
+        secureEndpoint ? "TLS oder lokaler Loopback" : "Für entfernte Server HTTPS verwenden"))
+    let scopedCredentials = ScopedCredentialStore(
+      base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
     checks.append(
       DiagnosticCheck(
         "Keychain / credential",
-        (try? credentials.read(
+        (try? scopedCredentials.read(
           account: config.openwebui.authMethod == "api_key" ? "api_token" : "password")) != nil))
     do {
       try await client.health()
@@ -37,8 +77,15 @@ public struct Doctor: Sendable {
     do {
       try await client.authenticate()
       checks.append(DiagnosticCheck("Authentication", true))
-      _ = try await client.models()
-      checks.append(DiagnosticCheck("Open WebUI API", true))
+      let models = try await client.models()
+      checks.append(DiagnosticCheck("Open WebUI API", true, "\(models.count) Modelle verfügbar"))
+      let configuredModel = config.openwebui.model.trimmingCharacters(in: .whitespacesAndNewlines)
+      checks.append(
+        DiagnosticCheck(
+          "Konfigurierte Modell-ID", !configuredModel.isEmpty && models.contains(configuredModel),
+          configuredModel.isEmpty
+            ? "Keine Modell-ID ausgewählt"
+            : (models.contains(configuredModel) ? "Modell verfügbar" : "Modell nicht gefunden")))
     } catch {
       checks.append(DiagnosticCheck("Authentication / API", false, error.localizedDescription))
     }
@@ -53,6 +100,40 @@ public struct Doctor: Sendable {
       DiagnosticCheck(
         "HTTP listener binding", config.api.bind == "127.0.0.1" || config.api.bind == "::1",
         "\(config.api.bind):\(config.api.port)"))
+    checks.append(
+      DiagnosticCheck(
+        "Lokale API-Authentifizierung", config.api.tokenRequired,
+        config.api.tokenRequired
+          ? "Bearer-Token erforderlich" : "Nicht aktiv; jeder lokale Prozess kann Anfragen senden"))
     return checks
+  }
+
+  private var microphonePermissionDescription: String {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized: return "Freigegeben"
+    case .notDetermined: return "Noch nicht angefragt"
+    case .denied: return "Abgelehnt"
+    case .restricted: return "Durch Systemrichtlinie eingeschränkt"
+    @unknown default: return "Unbekannter Status"
+    }
+  }
+
+  private func permissionCheck(for url: URL, expected: Int) -> DiagnosticCheck {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return DiagnosticCheck("Dateirechte \(url.lastPathComponent)", true, "Noch nicht angelegt")
+    }
+    let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+    let permissions = (attributes?[.posixPermissions] as? NSNumber)?.intValue
+    return DiagnosticCheck(
+      "Dateirechte \(url.lastPathComponent)", permissions == expected,
+      permissions.map { String(format: "%03o; erwartet %03o", $0, expected) }
+        ?? "Nicht lesbar")
+  }
+}
+
+extension String {
+  fileprivate var isLoopback: Bool {
+    let normalized = lowercased()
+    return normalized == "localhost" || normalized == "127.0.0.1" || normalized == "::1"
   }
 }

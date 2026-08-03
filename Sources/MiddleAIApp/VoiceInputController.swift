@@ -1,279 +1,9 @@
-import AppKit
 import AVFoundation
-import ApplicationServices
+import AppKit
+@preconcurrency import ApplicationServices
 import Foundation
 import MiddleAICore
 import OSLog
-
-struct DictationTarget {
-  let application: NSRunningApplication?
-  let icon: NSImage?
-  let bundleIdentifier: String?
-  let applicationName: String?
-}
-
-@MainActor final class TextInsertionService {
-  private struct ClipboardItem {
-    let values: [(NSPasteboard.PasteboardType, Data)]
-  }
-
-  func captureTarget() -> DictationTarget {
-    let app = NSWorkspace.shared.frontmostApplication
-    let target = app?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app
-    let icon = target?.bundleURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
-    return DictationTarget(
-      application: target, icon: icon, bundleIdentifier: target?.bundleIdentifier,
-      applicationName: target?.localizedName)
-  }
-
-  func insert(
-    _ text: String, into target: DictationTarget, smartFormatting: Bool,
-    formattingApplicationIDs: [String]
-  ) throws -> FormattedDictation {
-    guard AXIsProcessTrusted() else {
-      throw VoiceInputError.accessibilityPermissionMissing
-    }
-    let formattingEnabledForTarget = target.bundleIdentifier.map { targetID in
-      formattingApplicationIDs.contains { $0.caseInsensitiveCompare(targetID) == .orderedSame }
-    } ?? false
-    let formatted = smartFormatting && formattingEnabledForTarget
-      ? DictationFormatter.format(text)
-      : FormattedDictation(plainText: text, html: "", didApplyFormatting: false)
-    let pasteboard = NSPasteboard.general
-    let saved = saveClipboard(pasteboard)
-    pasteboard.clearContents()
-    let item = NSPasteboardItem()
-    guard item.setString(formatted.plainText, forType: .string) else {
-      throw VoiceInputError.couldNotInsertText
-    }
-    if formatted.didApplyFormatting {
-      item.setString(formatted.html, forType: .html)
-      if let rtf = rtfData(from: formatted.html) { item.setData(rtf, forType: .rtf) }
-    }
-    guard pasteboard.writeObjects([item]) else { throw VoiceInputError.couldNotInsertText }
-    let transcriptChangeCount = pasteboard.changeCount
-    target.application?.activate()
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-      let source = CGEventSource(stateID: .combinedSessionState)
-      let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-      let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-      down?.flags = .maskCommand
-      up?.flags = .maskCommand
-      down?.post(tap: .cghidEventTap)
-      up?.post(tap: .cghidEventTap)
-    }
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
-      guard pasteboard.changeCount == transcriptChangeCount else { return }
-      self.restoreClipboard(saved, to: pasteboard)
-    }
-    return formatted
-  }
-
-  private func rtfData(from html: String) -> Data? {
-    guard let data = html.data(using: .utf8),
-      let attributed = try? NSAttributedString(
-        data: data,
-        options: [
-          .documentType: NSAttributedString.DocumentType.html,
-          .characterEncoding: String.Encoding.utf8.rawValue,
-        ],
-        documentAttributes: nil)
-    else { return nil }
-    return try? attributed.data(
-      from: NSRange(location: 0, length: attributed.length),
-      documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
-  }
-
-  private func saveClipboard(_ pasteboard: NSPasteboard) -> [ClipboardItem] {
-    (pasteboard.pasteboardItems ?? []).map { item in
-      let values = item.types.compactMap { type in
-        item.data(forType: type).map { (type, $0) }
-      }
-      return ClipboardItem(values: values)
-    }
-  }
-
-  private func restoreClipboard(_ items: [ClipboardItem], to pasteboard: NSPasteboard) {
-    pasteboard.clearContents()
-    let restored = items.map { saved -> NSPasteboardItem in
-      let item = NSPasteboardItem()
-      for (type, data) in saved.values { item.setData(data, forType: type) }
-      return item
-    }
-    if !restored.isEmpty { pasteboard.writeObjects(restored) }
-  }
-}
-
-enum VoiceInputError: LocalizedError {
-  case accessibilityPermissionMissing
-  case inputMonitoringPermissionMissing
-  case couldNotInsertText
-  case assistantNotConfigured
-  case recordingCancelled
-
-  var errorDescription: String? {
-    switch self {
-    case .accessibilityPermissionMissing:
-      return "Bitte MiddleAI unter Datenschutz & Sicherheit > Bedienungshilfen erlauben."
-    case .inputMonitoringPermissionMissing:
-      return "Bitte MiddleAI unter Datenschutz & Sicherheit > Eingabeüberwachung erlauben."
-    case .couldNotInsertText: return "Der erkannte Text konnte nicht eingefügt werden."
-    case .assistantNotConfigured: return "OpenWebUI ist in MiddleAI noch nicht eingerichtet."
-    case .recordingCancelled: return "Diktat abgebrochen."
-    }
-  }
-}
-
-enum ActivationKeyChoice: String, CaseIterable, Identifiable {
-  case leftOption = "left_option"
-  case rightOption = "right_option"
-  case leftControl = "left_control"
-  case rightControl = "right_control"
-  case leftCommand = "left_command"
-  case rightCommand = "right_command"
-  case leftShift = "left_shift"
-  case rightShift = "right_shift"
-
-  var id: String { rawValue }
-
-  var keyCode: UInt16 {
-    switch self {
-    case .leftOption: return 58
-    case .rightOption: return 61
-    case .leftControl: return 59
-    case .rightControl: return 62
-    case .leftCommand: return 55
-    case .rightCommand: return 54
-    case .leftShift: return 56
-    case .rightShift: return 60
-    }
-  }
-
-  var label: String {
-    switch self {
-    case .leftOption: return "Linke Optionstaste"
-    case .rightOption: return "Rechte Optionstaste"
-    case .leftControl: return "Linke Control-Taste"
-    case .rightControl: return "Rechte Control-Taste"
-    case .leftCommand: return "Linke Command-Taste"
-    case .rightCommand: return "Rechte Command-Taste"
-    case .leftShift: return "Linke Umschalttaste"
-    case .rightShift: return "Rechte Umschalttaste"
-    }
-  }
-
-  var compactLabel: String {
-    switch self {
-    case .leftOption: return "⌥ links"
-    case .rightOption: return "⌥ rechts"
-    case .leftControl: return "⌃ links"
-    case .rightControl: return "⌃ rechts"
-    case .leftCommand: return "⌘ links"
-    case .rightCommand: return "⌘ rechts"
-    case .leftShift: return "⇧ links"
-    case .rightShift: return "⇧ rechts"
-    }
-  }
-
-  var modifierFlag: NSEvent.ModifierFlags {
-    switch self {
-    case .leftOption, .rightOption: return .option
-    case .leftControl, .rightControl: return .control
-    case .leftCommand, .rightCommand: return .command
-    case .leftShift, .rightShift: return .shift
-    }
-  }
-}
-
-@MainActor final class ActivationKeyMonitor {
-  private let keys: () -> (dictation: ActivationKeyChoice, assistant: ActivationKeyChoice)
-  private let onPressed: (VoiceMode) -> Void
-  private let onReleased: (VoiceMode) -> Void
-  private let onCancelled: () -> Void
-  private var globalFlagsMonitor: Any?
-  private var localFlagsMonitor: Any?
-  private var globalKeyMonitor: Any?
-  private var localKeyMonitor: Any?
-  private var pressed: Set<UInt16> = []
-
-  init(
-    keys: @escaping () -> (dictation: ActivationKeyChoice, assistant: ActivationKeyChoice),
-    onPressed: @escaping (VoiceMode) -> Void,
-    onReleased: @escaping (VoiceMode) -> Void,
-    onCancelled: @escaping () -> Void
-  ) {
-    self.keys = keys
-    self.onPressed = onPressed
-    self.onReleased = onReleased
-    self.onCancelled = onCancelled
-  }
-
-  func start() {
-    stop()
-    globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) {
-      [weak self] event in
-      Task { @MainActor in self?.handleFlags(event) }
-    }
-    localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
-      [weak self] event in
-      self?.handleFlags(event)
-      return event
-    }
-    globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) {
-      [weak self] _ in
-      Task { @MainActor in self?.cancelIfActivationKeyIsHeld() }
-    }
-    localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) {
-      [weak self] event in
-      self?.cancelIfActivationKeyIsHeld()
-      return event
-    }
-  }
-
-  func stop() {
-    for monitor in [globalFlagsMonitor, localFlagsMonitor, globalKeyMonitor, localKeyMonitor] {
-      if let monitor { NSEvent.removeMonitor(monitor) }
-    }
-    globalFlagsMonitor = nil
-    localFlagsMonitor = nil
-    globalKeyMonitor = nil
-    localKeyMonitor = nil
-    pressed.removeAll()
-  }
-
-  private func handleFlags(_ event: NSEvent) {
-    let configured = keys()
-    let mode: VoiceMode
-    if event.keyCode == configured.dictation.keyCode {
-      mode = .dictation
-    } else if event.keyCode == configured.assistant.keyCode {
-      mode = .assistant
-    } else {
-      return
-    }
-    let keyCode = event.keyCode
-    // `CGEventSource.keyState` can incorrectly report modifier keys as released when
-    // Input Monitoring was re-authorized after an app update. The flagsChanged event
-    // already contains the authoritative modifier state and still distinguishes the
-    // physical side through its key code.
-    let selectedKey = mode == .dictation ? configured.dictation : configured.assistant
-    let isDown = event.modifierFlags.contains(selectedKey.modifierFlag)
-    if isDown, !pressed.contains(keyCode) {
-      pressed.insert(keyCode)
-      onPressed(mode)
-    } else if !isDown, pressed.remove(keyCode) != nil {
-      onReleased(mode)
-    }
-  }
-
-  private func cancelIfActivationKeyIsHeld() {
-    guard !pressed.isEmpty else { return }
-    pressed.removeAll()
-    onCancelled()
-  }
-}
 
 @MainActor final class VoiceInputController {
   typealias EngineProvider = @MainActor () -> MiddleAIEngine?
@@ -349,7 +79,8 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
     let configured = configProvider().hotkeys
     return (
       ActivationKeyChoice(rawValue: configured.dictation) ?? .leftOption,
-      ActivationKeyChoice(rawValue: configured.assistant) ?? .rightOption)
+      ActivationKeyChoice(rawValue: configured.assistant) ?? .rightOption
+    )
   }
 
   private var readyStatus: String {
@@ -368,7 +99,9 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
     default:
       microphoneAuthorized = false
     }
-    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    // The C SDK exposes kAXTrustedCheckOptionPrompt as mutable global state, which is not
+    // concurrency-safe under Swift 6. Its documented dictionary key is stable.
+    let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
     _ = AXIsProcessTrustedWithOptions(prompt)
   }
 
@@ -531,7 +264,6 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
           self.onResult(result)
           let answer = result.displayText
           if case .local = result { engine.ttsQueue.enqueue(answer) }
-          if case .clarification = result { /* already queued by the engine */ }
           self.overlay.update(phase: .result, detail: answer)
           self.overlay.hide(after: 4.5)
           self.onStatus(String(answer.prefix(60)))
@@ -589,8 +321,8 @@ enum ActivationKeyChoice: String, CaseIterable, Identifiable {
   }
 }
 
-private extension InputResult {
-  var displayText: String {
+extension InputResult {
+  fileprivate var displayText: String {
     switch self {
     case .response(let text, _), .local(let text), .clarification(let text): return text
     }

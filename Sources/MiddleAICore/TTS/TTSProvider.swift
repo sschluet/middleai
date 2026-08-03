@@ -2,7 +2,7 @@
 import CryptoKit
 import FluidAudio
 import Foundation
-import MLXAudioTTS
+@preconcurrency import MLXAudioTTS
 import NaturalLanguage
 
 @MainActor public protocol TTSProvider: AnyObject {
@@ -65,11 +65,13 @@ public enum TTSVoiceCatalog {
   public static let qwenVoices: [TTSVoiceDescriptor] = [
     .init(
       id: "qwen_standard", name: "Clara · Standarddeutsch",
-      description: "Weiblich, warm und professionell. Neutrale deutsche Aussprache mit natürlicher Satzmelodie.",
+      description:
+        "Weiblich, warm und professionell. Neutrale deutsche Aussprache mit natürlicher Satzmelodie.",
       isFemale: true, isRecommended: true),
     .init(
       id: "qwen_calm", name: "Sophie · Ruhig",
-      description: "Weiblich, ruhig und klar. Für längere Erklärungen mit zurückhaltender Betonung.",
+      description:
+        "Weiblich, ruhig und klar. Für längere Erklärungen mit zurückhaltender Betonung.",
       isFemale: true),
     .init(
       id: "qwen_lively", name: "Mia · Lebendig",
@@ -80,11 +82,13 @@ public enum TTSVoiceCatalog {
   public static let voxtralVoices: [TTSVoiceDescriptor] = [
     .init(
       id: "de_female", name: "Voxtral · Deutsch weiblich",
-      description: "Natürliche deutsche Frauenstimme von Mistral. Nur für nicht-kommerzielle Nutzung lizenziert.",
+      description:
+        "Natürliche deutsche Frauenstimme von Mistral. Nur für nicht-kommerzielle Nutzung lizenziert.",
       isFemale: true, isRecommended: true),
     .init(
       id: "neutral_female", name: "Voxtral · Neutral weiblich",
-      description: "Neutrale mehrsprachige Frauenstimme. Deutsch wird unterstützt; nur nicht-kommerzielle Nutzung.",
+      description:
+        "Neutrale mehrsprachige Frauenstimme. Deutsch wird unterstützt; nur nicht-kommerzielle Nutzung.",
       isFemale: true),
     .init(
       id: "cheerful_female", name: "Voxtral · Freundlich weiblich",
@@ -94,58 +98,88 @@ public enum TTSVoiceCatalog {
 
   public static func qwenVoicePrompt(for id: String, rate: Float) -> String {
     let tempo: String
-    if rate < 0.92 { tempo = "Sprich etwas langsamer und mit kurzen natürlichen Pausen." }
-    else if rate > 1.08 { tempo = "Sprich zügig, aber weiterhin deutlich und flüssig." }
-    else { tempo = "Sprich in natürlichem Gesprächstempo." }
+    if rate < 0.92 {
+      tempo = "Sprich etwas langsamer und mit kurzen natürlichen Pausen."
+    } else if rate > 1.08 {
+      tempo = "Sprich zügig, aber weiterhin deutlich und flüssig."
+    } else {
+      tempo = "Sprich in natürlichem Gesprächstempo."
+    }
     switch id {
     case "qwen_calm":
-      return "Eine ruhige, klare erwachsene Frauenstimme mit neutralem Standarddeutsch, zurückhaltender Betonung und flüssiger Prosodie. \(tempo)"
+      return
+        "Eine ruhige, klare erwachsene Frauenstimme mit neutralem Standarddeutsch, zurückhaltender Betonung und flüssiger Prosodie. \(tempo)"
     case "qwen_lively":
-      return "Eine freundliche, lebendige junge Frauenstimme mit neutralem Standarddeutsch, warmer Klangfarbe und natürlicher ausdrucksstarker Betonung. \(tempo)"
+      return
+        "Eine freundliche, lebendige junge Frauenstimme mit neutralem Standarddeutsch, warmer Klangfarbe und natürlicher ausdrucksstarker Betonung. \(tempo)"
     default:
-      return "Eine warme, professionelle erwachsene Frauenstimme mit neutralem Standarddeutsch, präziser Aussprache und natürlicher flüssiger Satzmelodie. Englische Fachbegriffe werden authentisch ausgesprochen. \(tempo)"
+      return
+        "Eine warme, professionelle erwachsene Frauenstimme mit neutralem Standarddeutsch, präziser Aussprache und natürlicher flüssiger Satzmelodie. Englische Fachbegriffe werden authentisch ausgesprochen. \(tempo)"
     }
   }
 
   public static let supertonicVoices: [TTSVoiceDescriptor] = [
     .init(
-      id: "F1", name: "F1", description: "Weiblicher Supertonic-Referenzstil 1. Mehrsprachig mit explizitem Deutschmodus; für MiddleAI empfohlen.",
+      id: "F1", name: "F1",
+      description:
+        "Weiblicher Supertonic-Referenzstil 1. Mehrsprachig mit explizitem Deutschmodus; für MiddleAI empfohlen.",
       isFemale: true, isRecommended: true),
     .init(
-      id: "F2", name: "F2", description: "Weiblicher Supertonic-Referenzstil 2 mit eigener Klangfarbe. Deutsch wird nativ vom mehrsprachigen Modell erzeugt.",
+      id: "F2", name: "F2",
+      description:
+        "Weiblicher Supertonic-Referenzstil 2 mit eigener Klangfarbe. Deutsch wird nativ vom mehrsprachigen Modell erzeugt.",
       isFemale: true),
     .init(
-      id: "F3", name: "F3", description: "Weiblicher Supertonic-Referenzstil 3 mit eigener Klangfarbe. Lokal und für längere Antworten geeignet.",
+      id: "F3", name: "F3",
+      description:
+        "Weiblicher Supertonic-Referenzstil 3 mit eigener Klangfarbe. Lokal und für längere Antworten geeignet.",
       isFemale: true),
     .init(
-      id: "F4", name: "F4", description: "Weiblicher Supertonic-Referenzstil 4 mit eigener Klangfarbe. Vollständig lokale 44,1-kHz-Ausgabe.",
+      id: "F4", name: "F4",
+      description:
+        "Weiblicher Supertonic-Referenzstil 4 mit eigener Klangfarbe. Vollständig lokale 44,1-kHz-Ausgabe.",
       isFemale: true),
     .init(
-      id: "F5", name: "F5", description: "Weiblicher Supertonic-Referenzstil 5 mit eigener Klangfarbe. Vollständig lokal auf Apple Silicon.",
+      id: "F5", name: "F5",
+      description:
+        "Weiblicher Supertonic-Referenzstil 5 mit eigener Klangfarbe. Vollständig lokal auf Apple Silicon.",
       isFemale: true),
   ]
 
   public static let pocketVoices: [TTSVoiceDescriptor] = [
     .init(
-      id: "anna", name: "Anna", description: "Weiblicher PocketTTS-Stil. Bei deutscher Sprache kann ein deutlicher Akzent hörbar sein.",
+      id: "anna", name: "Anna",
+      description:
+        "Weiblicher PocketTTS-Stil. Bei deutscher Sprache kann ein deutlicher Akzent hörbar sein.",
       isFemale: true),
     .init(
-      id: "alba", name: "Alba", description: "Weiblicher PocketTTS-Stil; nicht speziell als deutsche Stimme aufgenommen, daher ist ein Akzent möglich.",
+      id: "alba", name: "Alba",
+      description:
+        "Weiblicher PocketTTS-Stil; nicht speziell als deutsche Stimme aufgenommen, daher ist ein Akzent möglich.",
       isFemale: true),
     .init(
-      id: "eve", name: "Eve", description: "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
+      id: "eve", name: "Eve",
+      description:
+        "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
       isFemale: true),
     .init(
-      id: "jane", name: "Jane", description: "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
+      id: "jane", name: "Jane",
+      description:
+        "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
       isFemale: true),
     .init(
-      id: "mary", name: "Mary", description: "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
+      id: "mary", name: "Mary",
+      description:
+        "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
       isFemale: true),
     .init(
-      id: "vera", name: "Vera", description: "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
+      id: "vera", name: "Vera",
+      description:
+        "Weiblicher PocketTTS-Stil mit alternativer Klangfarbe; deutscher Akzent ist möglich.",
       isFemale: true),
     .init(
-      id: "juergen", name: "Jürgen", description: "Männlicher, deutschsprachiger PocketTTS-Referenzstil.",
+      id: "juergen", name: "Jürgen",
+      description: "Männlicher, deutschsprachiger PocketTTS-Referenzstil.",
       isFemale: false),
   ]
 
@@ -159,7 +193,8 @@ public enum TTSVoiceCatalog {
       if $0.quality != $1.quality { return $0.quality.rawValue > $1.quality.rawValue }
       return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
     }.first?.identifier
-    return installed
+    return
+      installed
       .map { voice in
         let gender: String
         switch voice.gender {
@@ -172,12 +207,14 @@ public enum TTSVoiceCatalog {
         case .premium: quality = "Premiumqualität"
         case .enhanced: quality = "Erweiterte Qualität"
         default:
-          quality = voice.identifier.contains("compact")
+          quality =
+            voice.identifier.contains("compact")
             ? "Kompakte Systemstimme" : "Standardqualität"
         }
         return TTSVoiceDescriptor(
           id: voice.identifier, name: voice.name,
-          description: "\(gender), \(voice.language), \(quality). Bereits in macOS installiert und offline verfügbar.",
+          description:
+            "\(gender), \(voice.language), \(quality). Bereits in macOS installiert und offline verfügbar.",
           isFemale: voice.gender == .female,
           isRecommended: voice.identifier == recommendedID)
       }
@@ -221,7 +258,7 @@ public enum SpeechTextProcessor {
     "software", "startup", "streaming", "team", "tool", "tools", "upload", "user",
     "voice", "web", "workflow", "workspace",
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "in",
-    "is", "it", "of", "on", "or", "that", "the", "this", "to", "with", "you"
+    "is", "it", "of", "on", "or", "that", "the", "this", "to", "with", "you",
   ]
 
   private static let germanOverrides: Set<String> = [
@@ -230,7 +267,7 @@ public enum SpeechTextProcessor {
     "diese", "dieser", "durch", "ein", "eine", "einer", "einen", "er", "es", "für", "ganz",
     "hat", "hier", "ich", "im", "ist", "kann", "kein", "keine", "mit", "nicht", "noch",
     "oder", "ohne", "schon", "sein", "sich", "sie", "sind", "und", "vom", "von", "vor",
-    "war", "werden", "wie", "wird", "wir", "zu", "zum", "zur"
+    "war", "werden", "wie", "wird", "wir", "zu", "zum", "zur",
   ]
 
   private static let germanPronunciationAliases: [(String, String)] = [
@@ -258,8 +295,9 @@ public enum SpeechTextProcessor {
     var result = normalizeGermanNumbers(in: SpokenResponseSummarizer.plainText(text))
     for (source, pronunciation) in germanPronunciationAliases {
       let escaped = NSRegularExpression.escapedPattern(for: source)
-      guard let expression = try? NSRegularExpression(
-        pattern: "(?i)(?<!\\p{L})\(escaped)(?!\\p{L})")
+      guard
+        let expression = try? NSRegularExpression(
+          pattern: "(?i)(?<!\\p{L})\(escaped)(?!\\p{L})")
       else { continue }
       result = expression.stringByReplacingMatches(
         in: result, range: NSRange(result.startIndex..., in: result), withTemplate: pronunciation)
@@ -340,14 +378,18 @@ public enum SpeechTextProcessor {
     let commas = raw.filter { $0 == "," }.count
     let numeric: String
     if dots > 0, commas > 0 {
-      if let lastComma = raw.lastIndex(of: ","), let lastDot = raw.lastIndex(of: "."), lastComma > lastDot {
-        numeric = raw.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
+      if let lastComma = raw.lastIndex(of: ","), let lastDot = raw.lastIndex(of: "."),
+        lastComma > lastDot
+      {
+        numeric = raw.replacingOccurrences(of: ".", with: "").replacingOccurrences(
+          of: ",", with: ".")
       } else {
         numeric = raw.replacingOccurrences(of: ",", with: "")
       }
     } else if dots > 0 {
       let groups = raw.split(separator: ".", omittingEmptySubsequences: false)
-      numeric = groups.count > 1 && groups.dropFirst().allSatisfy({ $0.count == 3 })
+      numeric =
+        groups.count > 1 && groups.dropFirst().allSatisfy({ $0.count == 3 })
         ? groups.joined() : raw
     } else if commas > 1 {
       let groups = raw.split(separator: ",", omittingEmptySubsequences: false)
@@ -368,7 +410,9 @@ public enum SpeechTextProcessor {
 
   private static func language(for word: String) -> SpeechLanguage {
     let lower = word.lowercased()
-    if germanOverrides.contains(lower) || word.rangeOfCharacter(from: CharacterSet(charactersIn: "äöüßÄÖÜ")) != nil {
+    if germanOverrides.contains(lower)
+      || word.rangeOfCharacter(from: CharacterSet(charactersIn: "äöüßÄÖÜ")) != nil
+    {
       return .german
     }
     if explicitEnglishWords.contains(lower) || isEnglishBrandStyle(word) { return .english }
@@ -747,8 +791,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     if SpeechTextProcessor.prefersPreciseGermanVoice(text) {
       try await precise.speak(text)
     } else {
-      do { try await natural.speak(text) }
-      catch { try await precise.speak(text) }
+      do { try await natural.speak(text) } catch { try await precise.speak(text) }
     }
   }
 
@@ -760,12 +803,25 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
 
 /// Native Apple-Silicon inference for Qwen3-TTS VoiceDesign. The model is downloaded
 /// once through Hugging Face and then runs entirely on-device through MLX.
+private struct SendableSpeechGenerationModel: @unchecked Sendable {
+  let raw: any SpeechGenerationModel
+
+  var sampleRate: Int { raw.sampleRate }
+
+  func generateSamples(text: String, voice: String) async throws -> [Float] {
+    let audio = try await raw.generate(
+      text: text, voice: voice, refAudio: nil, refText: nil, language: "German",
+      generationParameters: nil)
+    return audio.asArray(Float.self)
+  }
+}
+
 @MainActor public final class Qwen3TTSProvider: TTSProvider {
   private static let modelRepository =
     "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit"
 
   private let voicePrompt: String
-  private var model: (any SpeechGenerationModel)?
+  private var model: SendableSpeechGenerationModel?
   private var playbackProcess: Process?
   private var temporaryAudioURL: URL?
   private var continuation: CheckedContinuation<Void, Error>?
@@ -793,12 +849,9 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     isPreparing = true
     do {
       let loadedModel = try await ensureModel()
-      let audio = try await loadedModel.generate(
-        text: clean, voice: voicePrompt, refAudio: nil, refText: nil, language: "German",
-        generationParameters: nil)
+      let samples = try await loadedModel.generateSamples(text: clean, voice: voicePrompt)
       try Task.checkCancellation()
       guard generation == currentGeneration else { throw CancellationError() }
-      let samples = audio.asArray(Float.self)
       let wav = try AudioWAV.data(
         from: samples, sampleRate: Double(loadedModel.sampleRate), normalize: false)
       let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -846,11 +899,12 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     continuation = nil
   }
 
-  private func ensureModel() async throws -> any SpeechGenerationModel {
+  private func ensureModel() async throws -> SendableSpeechGenerationModel {
     if let model { return model }
     let loaded = try await TTS.loadModel(modelRepo: Self.modelRepository)
-    model = loaded
-    return loaded
+    let wrapped = SendableSpeechGenerationModel(raw: loaded)
+    model = wrapped
+    return wrapped
   }
 
   private func finishPlayback(successfully: Bool) {
@@ -878,6 +932,8 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private static let uvSHA256 =
     "ed336d0ba49db8ef89b2b41fffa372ce63bd032f22a56f001c265891aec32829"
   private static let mlxAudioVersion = "0.4.6"
+  private static let mistralCommonVersion = "1.11.7"
+  private static let runtimeSchemaVersion = "1"
 
   private let engine: String
   private let modelRepository: String
@@ -900,7 +956,8 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   public init(voice: String) {
     self.engine = "voxtral_tts"
     self.modelRepository = "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
-    self.voice = TTSVoiceCatalog.voxtralVoices.contains(where: { $0.id == voice })
+    self.voice =
+      TTSVoiceCatalog.voxtralVoices.contains(where: { $0.id == voice })
       ? voice : "de_female"
     self.voicePrompt = ""
     self.rate = 1
@@ -989,8 +1046,9 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
       isPreparing = false
       throw error
     }
-    guard let runnerURL = Bundle.module.url(
-      forResource: "voxtral_runner", withExtension: "py")
+    guard
+      let runnerURL = Bundle.module.url(
+        forResource: "voxtral_runner", withExtension: "py")
     else {
       isPreparing = false
       throw MiddleAIError.configuration("Der Voxtral-Runner fehlt im App-Bundle")
@@ -1017,8 +1075,9 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     process.terminationHandler = { [weak self] ended in
       Task { @MainActor in
         guard let self, self.runnerProcess === ended else { return }
-        let details = String(
-          data: errorOutput.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let details =
+          String(
+            data: errorOutput.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let message = details.trimmingCharacters(in: .whitespacesAndNewlines)
         self.terminateRunner(
           error: MiddleAIError.invalidResponse(
@@ -1078,38 +1137,129 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
 
   private func ensureRuntime() async throws -> URL {
     #if !arch(arm64)
-    throw MiddleAIError.configuration("Voxtral TTS benötigt einen Apple-Silicon-Mac")
+      throw MiddleAIError.configuration("Voxtral TTS benötigt einen Apple-Silicon-Mac")
     #else
-    let root = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent(".middleai/runtime", isDirectory: true)
-    let python = root.appendingPathComponent("voxtral/.venv/bin/python")
-    if FileManager.default.isExecutableFile(atPath: python.path) {
-      let check = try await Self.run(
-        python, arguments: ["-c", "import mlx_audio, mistral_common"])
-      if check.status == 0 { return python }
-    }
+      let root = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".middleai/runtime", isDirectory: true)
+      let runtimeRoot = root.appendingPathComponent("voxtral", isDirectory: true)
+      try Self.recoverInterruptedRuntime(in: root, installed: runtimeRoot)
+      let installedPython = runtimeRoot.appendingPathComponent(".venv/bin/python")
+      if FileManager.default.isExecutableFile(atPath: installedPython.path),
+        try await Self.verifyRuntime(installedPython)
+      {
+        try Self.writeRuntimeManifest(at: runtimeRoot)
+        return installedPython
+      }
 
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let uv = root.appendingPathComponent("bin/uv")
-    if !FileManager.default.isExecutableFile(atPath: uv.path) {
-      try await installUV(uv, root: root)
-    }
-    let environment = ["UV_NO_MODIFY_PATH": "1"]
-    let venv = root.appendingPathComponent("voxtral/.venv")
-    if !FileManager.default.isExecutableFile(atPath: python.path) {
-      let result = try await Self.run(
-        uv, arguments: ["venv", "--python", "3.12", venv.path], environment: environment)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      let uv = root.appendingPathComponent("bin/uv")
+      if !FileManager.default.isExecutableFile(atPath: uv.path) {
+        try await installUV(uv, root: root)
+      }
+      guard
+        let requirements = Bundle.module.url(
+          forResource: "tts-runtime-requirements", withExtension: "txt")
+      else { throw MiddleAIError.configuration("Die gepinnte TTS-Laufzeitdefinition fehlt") }
+
+      let environment = ["UV_NO_MODIFY_PATH": "1"]
+      let stagingRoot = root.appendingPathComponent(
+        "voxtral.partial.\(UUID().uuidString)", isDirectory: true)
+      let stagedVenv = stagingRoot.appendingPathComponent(".venv", isDirectory: true)
+      let stagedPython = stagedVenv.appendingPathComponent("bin/python")
+      try FileManager.default.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: stagingRoot) }
+
+      var result = try await Self.run(
+        uv, arguments: ["venv", "--python", "3.12", stagedVenv.path], environment: environment)
       guard result.status == 0 else { throw Self.runtimeError(result.output) }
-    }
-    let result = try await Self.run(
-      uv,
-      arguments: [
-        "pip", "install", "--quiet", "--python", python.path,
-        "mlx-audio==\(Self.mlxAudioVersion)", "mistral-common[audio]",
-      ], environment: environment)
-    guard result.status == 0 else { throw Self.runtimeError(result.output) }
-    return python
+      result = try await Self.run(
+        uv,
+        arguments: [
+          "pip", "install", "--quiet", "--require-hashes", "--python", stagedPython.path,
+          "--requirements", requirements.path,
+        ], environment: environment)
+      guard result.status == 0 else { throw Self.runtimeError(result.output) }
+      guard try await Self.verifyRuntime(stagedPython) else {
+        throw MiddleAIError.invalidResponse(
+          "Die installierte TTS-Laufzeit hat den Versions- und Importtest nicht bestanden")
+      }
+      try Self.writeRuntimeManifest(at: stagingRoot)
+      try Self.activateRuntime(stagingRoot, replacing: runtimeRoot)
+      return runtimeRoot.appendingPathComponent(".venv/bin/python")
     #endif
+  }
+
+  private static func verifyRuntime(_ python: URL) async throws -> Bool {
+    let script = """
+      import importlib.metadata as m
+      import mlx_audio, mistral_common
+      assert m.version('mlx-audio') == '\(mlxAudioVersion)'
+      assert m.version('mistral-common') == '\(mistralCommonVersion)'
+      """
+    return try await run(python, arguments: ["-c", script]).status == 0
+  }
+
+  private static func writeRuntimeManifest(at root: URL) throws {
+    let values = [
+      "schema": runtimeSchemaVersion,
+      "python": "3.12",
+      "mlx-audio": mlxAudioVersion,
+      "mistral-common": mistralCommonVersion,
+      "requirements": "tts-runtime-requirements.txt",
+    ]
+    let data = try JSONSerialization.data(
+      withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
+    try data.write(to: root.appendingPathComponent("runtime-manifest.json"), options: .atomic)
+  }
+
+  private static func activateRuntime(_ staged: URL, replacing installed: URL) throws {
+    let fileManager = FileManager.default
+    let backup = installed.deletingLastPathComponent().appendingPathComponent(
+      "voxtral.backup.\(UUID().uuidString)", isDirectory: true)
+    let hadInstalledRuntime = fileManager.fileExists(atPath: installed.path)
+    if hadInstalledRuntime { try fileManager.moveItem(at: installed, to: backup) }
+    do {
+      try fileManager.moveItem(at: staged, to: installed)
+      if hadInstalledRuntime { try? fileManager.removeItem(at: backup) }
+    } catch {
+      if hadInstalledRuntime && !fileManager.fileExists(atPath: installed.path) {
+        try? fileManager.moveItem(at: backup, to: installed)
+      }
+      throw error
+    }
+  }
+
+  private static func recoverInterruptedRuntime(in root: URL, installed: URL) throws {
+    guard FileManager.default.fileExists(atPath: root.path) else { return }
+    let candidates = try FileManager.default.contentsOfDirectory(
+      at: root, includingPropertiesForKeys: [.contentModificationDateKey],
+      options: [.skipsHiddenFiles])
+    let backups = candidates.filter { $0.lastPathComponent.hasPrefix("voxtral.backup.") }
+      .sorted {
+        let left =
+          (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
+          .contentModificationDate ?? .distantPast
+        let right =
+          (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?
+          .contentModificationDate ?? .distantPast
+        return left > right
+      }
+    if !FileManager.default.fileExists(atPath: installed.path), let newest = backups.first {
+      try FileManager.default.moveItem(at: newest, to: installed)
+    }
+    for backup in backups where FileManager.default.fileExists(atPath: backup.path) {
+      try? FileManager.default.removeItem(at: backup)
+    }
+    // Old staging directories are never used across launches. Keep recent directories in
+    // case a CLI process and the app are preparing the shared runtime concurrently.
+    for partial in candidates where partial.lastPathComponent.hasPrefix("voxtral.partial.") {
+      let changed =
+        (try? partial.resourceValues(forKeys: [.contentModificationDateKey]))?
+        .contentModificationDate ?? .distantPast
+      if Date().timeIntervalSince(changed) > 3_600 {
+        try? FileManager.default.removeItem(at: partial)
+      }
+    }
   }
 
   private func installUV(_ destination: URL, root: URL) async throws {
@@ -1128,17 +1278,22 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-uv-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: temporary) }
     let archive = temporary.appendingPathComponent("uv.tar.gz")
     try data.write(to: archive, options: .atomic)
     let extracted = try await Self.run(
       URL(fileURLWithPath: "/usr/bin/tar"), arguments: ["-xzf", archive.path, "-C", temporary.path])
     guard extracted.status == 0 else { throw Self.runtimeError(extracted.output) }
     let source = temporary.appendingPathComponent("uv-aarch64-apple-darwin/uv")
+    let stagedDestination = destination.deletingLastPathComponent().appendingPathComponent(
+      "uv.partial.\(UUID().uuidString)")
     try FileManager.default.createDirectory(
       at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try FileManager.default.copyItem(at: source, to: destination)
+    defer { try? FileManager.default.removeItem(at: stagedDestination) }
+    try FileManager.default.copyItem(at: source, to: stagedDestination)
     try FileManager.default.setAttributes(
-      [.posixPermissions: 0o755], ofItemAtPath: destination.path)
+      [.posixPermissions: 0o755], ofItemAtPath: stagedDestination.path)
+    try FileManager.default.moveItem(at: stagedDestination, to: destination)
   }
 
   private static func run(
@@ -1151,14 +1306,14 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
       process.arguments = arguments
       process.standardOutput = pipe
       process.standardError = pipe
-      process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+      process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new
+      }
       process.terminationHandler = { ended in
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         continuation.resume(
           returning: (ended.terminationStatus, String(data: data, encoding: .utf8) ?? ""))
       }
-      do { try process.run() }
-      catch { continuation.resume(throwing: error) }
+      do { try process.run() } catch { continuation.resume(throwing: error) }
     }
   }
 
@@ -1194,8 +1349,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
           }
         }
       }
-      do { try process.run() }
-      catch {
+      do { try process.run() } catch {
         playbackContinuation = nil
         playbackProcess = nil
         continuation.resume(throwing: error)

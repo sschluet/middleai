@@ -1,10 +1,11 @@
 import AppKit
 import MiddleAICore
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension Notification.Name {
-  fileprivate static let middleAIReopen = Notification.Name("MiddleAIReopen")
-  fileprivate static let middleAIQuickInputFocus = Notification.Name("MiddleAIQuickInputFocus")
+  static let middleAIReopen = Notification.Name("MiddleAIReopen")
+  static let middleAIQuickInputFocus = Notification.Name("MiddleAIQuickInputFocus")
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -46,8 +47,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var ttsModelStatuses: [TTSModelDownloadStatus] = TTSModelLibrary.scan(
     activeModelID: nil, confirmed: [], failures: [:])
   @Published var ttsPreparingModelID: String?
+  @Published var voxtralLicenseAccepted = UserDefaults.standard.bool(
+    forKey: "tts.voxtral.cc-by-nc-4.accepted")
   @Published var intelligenceStatus = "Bereit. Die schnelle lokale Hybrid-Auswahl ist aktiv."
   @Published var conversations: [Conversation] = []
+  @Published var localCacheStatus = "Lokaler Cache wird geprüft"
+  @Published var diagnosticChecks: [DiagnosticCheck] = []
+  @Published var diagnosticsRunning = false
   let credentials = CompositeCredentialStore()
   private(set) var engine: MiddleAIEngine?
   private var server: LocalInputServer?
@@ -69,6 +75,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     needsSetup = !FileManager.default.fileExists(atPath: ConfigLoader.defaultURL.path)
     do {
       config = try ConfigLoader.load()
+      if config.tts.provider == "voxtral_tts" && !voxtralLicenseAccepted {
+        config.tts.provider = "macos"
+        config.tts.voice = TTSVoiceCatalog.defaultVoice(for: "macos")
+        try? ConfigLoader.save(config)
+        ttsStatus = "Voxtral wurde deaktiviert, bis die nicht-kommerzielle Lizenz bestätigt ist"
+      }
       if config.tts.provider == "adaptive" && config.tts.voice.hasPrefix("F") {
         config.tts.voice = TTSVoiceCatalog.defaultVoice(for: "adaptive")
         try? ConfigLoader.save(config)
@@ -84,6 +96,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         .isEmpty
       needsSetup = needsSetup || usernameMissing || modelMissing
       try rebuild()
+      applyConfiguredCacheRetention()
       refreshConversations()
       if !needsSetup { Task { await connectAndServe() } }
     } catch {
@@ -214,8 +227,114 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
   func refreshConversations() {
-    do { conversations = try engine?.manager.list() ?? [] }
-    catch { lastError = error.localizedDescription }
+    do {
+      conversations = try engine?.manager.list() ?? []
+      if let statistics = try engine?.manager.cacheStatistics() {
+        localCacheStatus =
+          "\(statistics.conversations) Unterhaltungen · \(statistics.messages) Nachrichten"
+      } else {
+        localCacheStatus = "Lokaler Cache ist leer"
+      }
+    } catch { lastError = error.localizedDescription }
+  }
+  func purgeLocalHistory(olderThanDays days: Int) {
+    guard let engine else { return }
+    do {
+      let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+      try engine.manager.purgeLocalHistory(olderThan: cutoff)
+      responseText = ""
+      refreshConversations()
+      voiceStatus = "Lokaler Cache wurde bereinigt"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func savePrivacySettings() {
+    do {
+      try ConfigLoader.save(config)
+      applyConfiguredCacheRetention()
+      refreshConversations()
+      voiceStatus =
+        config.privacy.localCacheRetentionDays == 0
+        ? "Lokaler Cache wird dauerhaft aufbewahrt"
+        : "Lokale Aufbewahrung wurde gespeichert"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  private func applyConfiguredCacheRetention() {
+    guard config.privacy.localCacheRetentionDays > 0 else { return }
+    purgeLocalHistory(olderThanDays: config.privacy.localCacheRetentionDays)
+  }
+  func clearLocalHistory() {
+    guard let engine else { return }
+    do {
+      try engine.manager.clearLocalHistory()
+      conversations = []
+      responseText = ""
+      localCacheStatus = "Lokaler Cache ist leer"
+      voiceStatus = "Lokaler MiddleAI-Cache wurde gelöscht"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func runDiagnostics() {
+    guard let engine, !diagnosticsRunning else { return }
+    diagnosticsRunning = true
+    Task {
+      let checks = await Doctor().run(
+        config: config, credentials: credentials, client: engine.client)
+      diagnosticChecks = checks
+      diagnosticsRunning = false
+    }
+  }
+
+  func exportDiagnostics() {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = "MiddleAI-Diagnose.txt"
+    panel.allowedContentTypes = [.plainText]
+    guard panel.runModal() == .OK, let destination = panel.url else { return }
+    let appVersion =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+      ?? "development"
+    let modelLines = ttsModelStatuses.map {
+      "- \($0.title): \($0.phase) · \($0.downloadedSize)"
+    }.joined(separator: "\n")
+    let checkLines = diagnosticChecks.map {
+      "- \($0.passed ? "OK" : "FEHLER") \($0.name)"
+        + ($0.detail.map { ": \(Self.redactedDiagnosticDetail($0))" } ?? "")
+    }.joined(separator: "\n")
+    let report = """
+      MiddleAI Diagnose
+      Version: \(appVersion)
+      macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
+      Architektur: \(ProcessInfo.processInfo.machineHardwareName)
+      TTS-Provider: \(config.tts.provider)
+      OpenWebUI-Authentifizierung: \(config.openwebui.authMethod)
+
+      Prüfungen:
+      \(checkLines.isEmpty ? "- Noch nicht ausgeführt" : checkLines)
+
+      Lokale TTS-Modelle:
+      \(modelLines)
+
+      Datenschutz: Benutzername, Zugangsdaten, Prompts und Antworten sind nicht enthalten.
+      """
+    do {
+      try report.write(to: destination, atomically: true, encoding: .utf8)
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+
+  private static func redactedDiagnosticDetail(_ detail: String) -> String {
+    var sanitized = detail
+    if let expression = try? NSRegularExpression(pattern: #"https?://[^\s]+"#) {
+      sanitized = expression.stringByReplacingMatches(
+        in: sanitized, range: NSRange(sanitized.startIndex..., in: sanitized),
+        withTemplate: "[Server ausgeblendet]")
+    }
+    return String(sanitized.prefix(300))
   }
   func activateConversation(_ conversation: Conversation) {
     guard let engine else { return }
@@ -261,7 +380,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     config.dictation.smartFormatting = enabled
     do {
       try ConfigLoader.save(config)
-      voiceStatus = enabled
+      voiceStatus =
+        enabled
         ? "App-spezifische Diktatformatierung ist aktiv"
         : "App-spezifische Diktatformatierung ist deaktiviert"
     } catch {
@@ -280,7 +400,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     do {
       try ConfigLoader.save(config)
-      voiceStatus = enabled
+      voiceStatus =
+        enabled
         ? "Formatierungsbefehle für die ausgewählte App aktiviert"
         : "Formatierungsbefehle für die ausgewählte App deaktiviert"
     } catch {
@@ -332,9 +453,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   }
   func selectTTSProvider(_ provider: String) {
     guard provider != config.tts.provider else { return }
+    guard provider != "voxtral_tts" || voxtralLicenseAccepted else {
+      ttsStatus = "Bitte bestätige zuerst die nicht-kommerzielle Voxtral-Lizenz"
+      return
+    }
     config.tts.provider = provider
     config.tts.voice = TTSVoiceCatalog.defaultVoice(for: provider)
     applySpeechSettings(preview: provider != "local_model")
+  }
+  func acceptVoxtralLicenseAndSelect() {
+    voxtralLicenseAccepted = true
+    UserDefaults.standard.set(true, forKey: "tts.voxtral.cc-by-nc-4.accepted")
+    selectTTSProvider("voxtral_tts")
   }
   func selectTTSVoice(_ voice: String) {
     guard voice != config.tts.voice else { return }
@@ -375,7 +505,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     case "voxtral_tts":
       return "Voxtral wird lokal eingerichtet; Laufzeit und 4-Bit-Modell umfassen etwa 3 GB …"
     case "adaptive": return "Lokale deutsche Stimmen werden vorbereitet…"
-    case "supertonic3": return "Supertonic 3 wird lokal vorbereitet; der erste Download kann etwas dauern…"
+    case "supertonic3":
+      return "Supertonic 3 wird lokal vorbereitet; der erste Download kann etwas dauern…"
     case "pockettts": return "PocketTTS German wird lokal vorbereitet…"
     default: return "\(ttsProviderName) wird vorbereitet…"
     }
@@ -385,7 +516,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       ttsStatus = "Sprachausgabe ist deaktiviert"
       return
     }
-    guard ["adaptive", "pockettts", "supertonic3", "qwen3_tts", "voxtral_tts"].contains(config.tts.provider) else {
+    guard
+      ["adaptive", "pockettts", "supertonic3", "qwen3_tts", "voxtral_tts"].contains(
+        config.tts.provider)
+    else {
       ttsStatus = "\(ttsProviderName) ist lokal bereit"
       return
     }
@@ -411,9 +545,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       ttsStatus = "Ein laufender Modelldownload kann nicht gelöscht werden"
       return
     }
-    let paths = TTSModelLibrary.deletablePaths(for: model.id).filter {
-      FileManager.default.fileExists(atPath: $0.path)
-    }
+    let paths =
+      model.phase == .updateAvailable
+      ? TTSModelLibrary.deletablePaths(for: model.id).filter {
+        FileManager.default.fileExists(atPath: $0.path)
+      } : []
     guard !paths.isEmpty else {
       ttsStatus = "Für \(model.title) wurden keine Modelldaten gefunden"
       refreshTTSModelStatuses()
@@ -423,6 +559,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     ttsPreviewTask?.cancel()
     confirmedTTSModels.remove(model.id)
     ttsModelFailures[model.id] = nil
+    TTSModelLibrary.clearInstallationRecord(modelID: model.id)
     if TTSModelLibrary.modelID(for: config.tts.provider) == model.id {
       config.tts.provider = "macos"
       config.tts.voice = TTSVoiceCatalog.defaultVoice(for: "macos")
@@ -445,6 +582,54 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  func repairTTSModel(_ model: TTSModelDownloadStatus) {
+    guard model.phase != .downloading else { return }
+    if model.id == "voxtral_tts" && !voxtralLicenseAccepted {
+      ttsStatus = "Bitte bestätige zuerst die nicht-kommerzielle Voxtral-Lizenz"
+      return
+    }
+    let paths = TTSModelLibrary.deletablePaths(for: model.id).filter {
+      FileManager.default.fileExists(atPath: $0.path)
+    }
+    engine?.ttsQueue.stop()
+    ttsPreviewTask?.cancel()
+    confirmedTTSModels.remove(model.id)
+    ttsModelFailures[model.id] = nil
+    TTSModelLibrary.clearInstallationRecord(modelID: model.id)
+
+    guard !paths.isEmpty else {
+      continueTTSModelRepair(model)
+      return
+    }
+    ttsStatus = "\(model.title) wird für eine saubere Neuinstallation vorbereitet …"
+    NSWorkspace.shared.recycle(paths) { [weak self] _, error in
+      Task { @MainActor in
+        if let error {
+          self?.ttsStatus = "Alte Modelldaten konnten nicht entfernt werden"
+          self?.lastError = error.localizedDescription
+        } else {
+          self?.continueTTSModelRepair(model)
+        }
+      }
+    }
+  }
+
+  private func continueTTSModelRepair(_ model: TTSModelDownloadStatus) {
+    guard let provider = TTSModelLibrary.provider(for: model.id) else { return }
+    config.tts.provider = provider
+    config.tts.voice = TTSVoiceCatalog.defaultVoice(for: provider)
+    do {
+      try ConfigLoader.save(config)
+      try rebuild()
+      guard let engine else { return }
+      startTTSPreparation(using: engine, preview: false)
+      Task { [weak self] in await self?.connectAndServe() }
+    } catch {
+      ttsStatus = "\(model.title) konnte nicht neu vorbereitet werden"
+      lastError = error.localizedDescription
+    }
+  }
+
   private func startTTSPreparation(using selectedEngine: MiddleAIEngine, preview: Bool) {
     ttsPreviewTask?.cancel()
     let provider = config.tts.provider
@@ -453,6 +638,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     if let modelID {
       ttsPreparingModelID = modelID
       ttsModelFailures[modelID] = nil
+      // Adaptive mode deliberately treats Supertonic as optional and swallows preparation
+      // failures in favor of macOS speech. It must not create a successful-install marker.
+      if provider != "adaptive" { try? TTSModelLibrary.beginInstallation(modelID: modelID) }
       startTTSDownloadMonitor()
     } else {
       ttsPreparingModelID = nil
@@ -462,7 +650,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       do {
         try await selectedEngine.ttsQueue.prepare()
         guard !Task.isCancelled else { return }
-        if let modelID, provider != "adaptive" { self?.confirmedTTSModels.insert(modelID) }
+        if let modelID, provider != "adaptive" {
+          try TTSModelLibrary.recordSuccessfulInstallation(modelID: modelID)
+          self?.confirmedTTSModels.insert(modelID)
+        }
         self?.lastError = ""
         self?.ttsStatus = "\(self?.ttsProviderName ?? "Sprachausgabe") ist lokal bereit"
         self?.finishTTSPreparation(modelID: modelID)
@@ -473,7 +664,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let detail = String(error.localizedDescription.prefix(170))
         self?.ttsStatus = "Stimme nicht bereit: \(detail)"
         self?.lastError = error.localizedDescription
-        if let modelID { self?.ttsModelFailures[modelID] = detail }
+        if let modelID {
+          TTSModelLibrary.markInstallationFailed(modelID: modelID)
+          self?.ttsModelFailures[modelID] = detail
+        }
         self?.finishTTSPreparation(modelID: modelID)
       }
     }
@@ -509,7 +703,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     config.routing.continuationTimeoutSeconds = 300
     config.localLLM.enabled = true
     config.localLLM.provider = "apple"
-    saveIntelligenceSettings(message: "Empfohlen aktiv: Hybrid mit Apple Intelligence als lokaler Rückfrage")
+    saveIntelligenceSettings(
+      message: "Empfohlen aktiv: Hybrid mit Apple Intelligence als lokaler Rückfrage")
   }
 
   var intelligenceProviderChoice: String {
@@ -583,7 +778,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let code = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(code)
         else { throw MiddleAIError.network("Das lokale Modell antwortet nicht.") }
-        struct ModelList: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
+        struct ModelList: Decodable {
+          struct Model: Decodable { let id: String }
+          let data: [Model]
+        }
         let models = (try? JSONDecoder().decode(ModelList.self, from: data).data.map(\.id)) ?? []
         if config.localLLM.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           let first = models.first
@@ -592,12 +790,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let name = config.localLLM.provider == "llama_cpp" ? "llama.cpp" : "Ollama"
         if models.isEmpty {
-          intelligenceStatus = "\(name) ist erreichbar, meldet aber noch kein geladenes Modell. Bitte Modell-ID oder Alias eintragen."
+          intelligenceStatus =
+            "\(name) ist erreichbar, meldet aber noch kein geladenes Modell. Bitte Modell-ID oder Alias eintragen."
         } else {
           intelligenceStatus = "\(name) ist erreichbar · \(models.count) Modell(e) gefunden"
         }
       } catch {
-        intelligenceStatus = "Lokaler Server nicht erreichbar. Endpunkt und laufenden Dienst prüfen."
+        intelligenceStatus =
+          "Lokaler Server nicht erreichbar. Endpunkt und laufenden Dienst prüfen."
         lastError = error.localizedDescription
       }
     }
@@ -681,490 +881,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     helpWindow?.center()
     helpWindow?.makeKeyAndOrderFront(nil)
   }
-  private var stateWindowTitle: String { needsSetup ? "MiddleAI einrichten" : "MiddleAI Einstellungen" }
-}
-
-private struct MenuContent: View {
-  @ObservedObject var state: AppState
-  var body: some View {
-    Text("Status: \(state.status)")
-    Text(state.voiceStatus).font(.caption)
-    Text(state.ttsStatus).font(.caption)
-    Text("Current Conversation:")
-    Text(state.currentTitle).font(.caption)
-    Divider()
-    Menu(
-      "Profile: \(state.engine?.activeProfile.capitalized ?? state.config.activeProfile.capitalized)"
-    ) {
-      ForEach(["default", "management", "architecture", "coding", "research"], id: \.self) {
-        profile in
-        Button(profile.capitalized) {
-          state.submit(
-            profile == "architecture"
-              ? "Architekturmodus"
-              : profile == "coding"
-                ? "Codingmodus"
-                : profile == "management"
-                  ? "Managementmodus" : profile == "research" ? "Recherchemodus" : "Standardmodus")
-        }
-      }
-    }
-    Divider()
-    Button("Quick Input…") { state.showQuickInput() }
-    Button("Setup / Settings…") { state.showSetupWindow() }
-    Button("Hilfe & Systemanforderungen…") { state.showHelpWindow() }
-    Button("New Conversation") { state.newConversation() }
-    Button("Stop Speaking") { state.stopSpeaking() }
-    Button("Open Current Chat in Open WebUI") { state.openCurrentChat() }.disabled(
-      state.engine?.manager.currentConversation?.openWebUIChatID == nil)
-    Divider()
-    SettingsLink { Text("Settings") }
-    Button("Diagnostics") { state.submit("Welcher Chat ist gerade aktiv?") }
-    if !state.lastError.isEmpty { Text(state.lastError).font(.caption).foregroundStyle(.red) }
-    Divider()
-    Button("Quit MiddleAI") { NSApplication.shared.terminate(nil) }
-  }
-}
-
-private struct QuickInputView: View {
-  @ObservedObject var state: AppState
-  @FocusState private var focused: Bool
-  @State private var searchText = ""
-
-  private var filteredConversations: [Conversation] {
-    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !query.isEmpty else { return state.conversations }
-    return state.conversations.filter {
-      ($0.title + " " + $0.summary).localizedCaseInsensitiveContains(query)
-    }
-  }
-
-  var body: some View {
-    HStack(spacing: 0) {
-      VStack(alignment: .leading, spacing: 14) {
-        HStack(spacing: 10) {
-          MiddleAIIconView(cornerRadius: 9).frame(width: 36, height: 36)
-          VStack(alignment: .leading, spacing: 1) {
-            Text("MiddleAI").font(.headline)
-            Text("Lokaler Sprachassistent").font(.caption).foregroundStyle(.secondary)
-          }
-        }
-        .padding(.horizontal, 14)
-
-        Button {
-          state.newConversation()
-          focused = true
-        } label: {
-          Label("Neue Unterhaltung", systemImage: "square.and.pencil")
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .padding(.horizontal, 12)
-
-        HStack(spacing: 8) {
-          Image(systemName: "magnifyingglass")
-            .foregroundStyle(.secondary)
-          TextField("Unterhaltungen suchen", text: $searchText)
-            .textFieldStyle(.plain)
-          if !searchText.isEmpty {
-            Button { searchText = "" } label: {
-              Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-            }
-            .buttonStyle(.plain)
-          }
-        }
-        .padding(.horizontal, 11)
-        .frame(height: 34)
-        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.07))
-        }
-        .padding(.horizontal, 12)
-
-        ScrollView {
-          LazyVStack(spacing: 4) {
-            ForEach(filteredConversations) { conversation in
-              ConversationSidebarRow(
-                conversation: conversation,
-                selected: conversation.id == state.engine?.manager.currentConversation?.id
-              ) {
-                state.activateConversation(conversation)
-              }
-            }
-          }
-          .padding(.horizontal, 8)
-        }
-      }
-      .padding(.vertical, 16)
-      .frame(width: 252)
-      .background(.ultraThinMaterial)
-
-      Divider()
-
-      VStack(spacing: 0) {
-        HStack(spacing: 12) {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(state.currentTitle)
-              .font(.title3.weight(.semibold))
-              .lineLimit(1)
-            Text(state.engine?.activeProfile.capitalized ?? "Default")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-          Spacer()
-          HStack(spacing: 6) {
-            Circle()
-              .fill(state.status == "Connected" ? Color.green : Color.orange)
-              .frame(width: 7, height: 7)
-            Text(state.status == "Connected" ? "Verbunden" : "Offline")
-              .font(.caption.weight(.medium))
-              .foregroundStyle(.secondary)
-          }
-          .padding(.horizontal, 9).padding(.vertical, 5)
-          .background(Color.primary.opacity(0.045), in: Capsule())
-          if state.engine?.manager.currentConversation?.openWebUIChatID != nil {
-            Button { state.openCurrentChat() } label: {
-              Label("Open WebUI", systemImage: "arrow.up.right.square")
-            }
-            .buttonStyle(.bordered)
-          }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 15)
-
-        Divider()
-
-        ZStack {
-          ScrollView {
-            if state.responseText.isEmpty && !state.isWorking {
-              VStack(spacing: 14) {
-                MiddleAIIconView(cornerRadius: 17)
-                  .frame(width: 70, height: 70)
-                Text("Womit kann ich helfen?")
-                  .font(.title2.weight(.semibold))
-                Text("Schreibe eine Nachricht oder nutze die rechte Optionstaste für eine Sprachanfrage.")
-                  .multilineTextAlignment(.center)
-                  .foregroundStyle(.secondary)
-                  .frame(maxWidth: 430)
-              }
-              .frame(maxWidth: .infinity, minHeight: 370)
-            } else if !state.responseText.isEmpty {
-              Text(state.responseText)
-                .font(.body)
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(22)
-                .background(
-                  Color(nsColor: .controlBackgroundColor).opacity(0.76),
-                  in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                .overlay {
-                  RoundedRectangle(cornerRadius: 19, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.07))
-                }
-                .shadow(color: .black.opacity(0.035), radius: 10, y: 4)
-                .padding(24)
-            }
-          }
-
-          if state.isWorking {
-            VStack(spacing: 12) {
-              ProgressView().controlSize(.small)
-              Text("OpenWebUI erstellt die Antwort")
-                .font(.callout.weight(.medium))
-              Text("Ein Druck auf die rechte Optionstaste bricht ab.")
-                .font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-            .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.12), radius: 18, y: 8)
-          }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        if !state.lastError.isEmpty {
-          Label(state.lastError, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
-            .foregroundStyle(.red)
-            .textSelection(.enabled)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 8)
-        }
-
-        HStack(alignment: .bottom, spacing: 12) {
-          TextField("Nachricht an MiddleAI", text: $state.input, axis: .vertical)
-            .textFieldStyle(.plain)
-            .lineLimit(1...5)
-            .focused($focused)
-            .disabled(state.isWorking)
-            .onSubmit { state.submit() }
-          Button { state.submit() } label: {
-            Image(systemName: "arrow.up")
-              .font(.system(size: 13, weight: .bold))
-              .frame(width: 26, height: 26)
-          }
-          .buttonStyle(.borderedProminent)
-          .buttonBorderShape(.circle)
-          .disabled(state.isWorking || state.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 17, style: .continuous)
-            .strokeBorder(.quaternary, lineWidth: 0.8)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 18)
-      }
-      .background(
-        LinearGradient(
-          colors: [Color(nsColor: .windowBackgroundColor), Color.accentColor.opacity(0.025)],
-          startPoint: .top, endPoint: .bottom))
-    }
-    .frame(minWidth: 820, minHeight: 560)
-    .onAppear { focused = true }
-    .onReceive(NotificationCenter.default.publisher(for: .middleAIQuickInputFocus)) { _ in
-      focused = true
-    }
-  }
-}
-
-private struct ConversationSidebarRow: View {
-  let conversation: Conversation
-  let selected: Bool
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 10) {
-        Image(systemName: "bubble.left.and.text.bubble.right")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(selected ? Color.accentColor : .secondary)
-          .frame(width: 18)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(conversation.title)
-            .font(.callout.weight(selected ? .semibold : .regular))
-            .lineLimit(1)
-          Text(conversation.lastUsedAt, style: .relative)
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 8)
-      .contentShape(Rectangle())
-      .background(
-        selected ? Color.accentColor.opacity(0.12) : Color.clear,
-        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-private struct LegacySettingsView: View {
-  @ObservedObject var state: AppState
-  @State private var password = ""
-  @State private var message = ""
-  var body: some View {
-    TabView {
-      Form {
-        if state.needsSetup {
-          Text("Welcome to MiddleAI").font(.title2)
-          Text(
-            "Enter your private Open WebUI connection. The password is stored only in macOS Keychain."
-          )
-        }
-        TextField("Open WebUI URL", text: $state.config.openwebui.url)
-        TextField("Username / email", text: $state.config.openwebui.username)
-        SecureField("Password", text: $password)
-        TextField("Model ID", text: $state.config.openwebui.model)
-        Toggle("Verify TLS certificates", isOn: $state.config.openwebui.tlsVerify)
-        TextField(
-          "Custom CA file (optional)",
-          text: Binding(
-            get: { state.config.openwebui.caFile ?? "" },
-            set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
-        HStack {
-          Button("Save & Test Connection") { save() }
-          Text(message).foregroundStyle(message.hasPrefix("Saved") ? .green : .red)
-        }
-      }.padding().tabItem { Label("Connection", systemImage: "network") }
-      Form {
-        Picker("Routing strategy", selection: $state.config.routing.strategy) {
-          Text("Hybrid").tag("hybrid")
-          Text("Heuristic").tag("heuristic")
-        }
-        TextField(
-          "Continuation timeout (seconds)", value: $state.config.routing.continuationTimeoutSeconds,
-          format: .number)
-        Toggle("Use local routing LLM", isOn: $state.config.localLLM.enabled)
-        TextField("Local router URL", text: $state.config.localLLM.url)
-        TextField("Local router model", text: $state.config.localLLM.model)
-      }.padding().tabItem { Label("Routing", systemImage: "arrow.triangle.branch") }
-      Form {
-        Toggle(
-          "Antworten vorlesen",
-          isOn: Binding(
-            get: { state.config.tts.enabled },
-            set: {
-              state.config.tts.enabled = $0
-              state.applySpeechSettings()
-            }))
-        Picker(
-          "Sprachmodell",
-          selection: Binding(
-            get: { state.config.tts.provider },
-            set: { state.selectTTSProvider($0) })
-        ) {
-          Text("Qwen3-TTS · lokal · natürlichstes Deutsch").tag("qwen3_tts")
-          Text("Mistral Voxtral · lokal · nicht-kommerziell").tag("voxtral_tts")
-          Text("Supertonic 3 · lokal · beste Qualität").tag("supertonic3")
-          Text("Apple-Systemstimmen · lokal").tag("macos")
-          Text("PocketTTS · lokal · älteres Modell").tag("pockettts")
-          Text("Eigenes lokales Programm").tag("local_model")
-        }
-        Text(providerDescription)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-
-        if !state.availableTTSVoices.isEmpty {
-          Section("Verfügbare Stimmen") {
-            ForEach(state.availableTTSVoices) { voice in
-              Button {
-                state.selectTTSVoice(voice.id)
-              } label: {
-                HStack(alignment: .top, spacing: 10) {
-                  Image(systemName: voice.isFemale ? "person.wave.2" : "person.wave.2.fill")
-                    .frame(width: 18)
-                    .foregroundStyle(state.config.tts.voice == voice.id ? Color.accentColor : .secondary)
-                  VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                      Text(voice.name).font(.body.weight(.medium))
-                      if voice.isRecommended {
-                        Text("Empfohlen")
-                          .font(.caption2.weight(.semibold))
-                          .foregroundStyle(.secondary)
-                      }
-                    }
-                    Text(voice.description)
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                      .fixedSize(horizontal: false, vertical: true)
-                  }
-                  Spacer(minLength: 8)
-                  if state.config.tts.voice == voice.id {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
-                  }
-                }
-                .contentShape(Rectangle())
-              }
-              .buttonStyle(.plain)
-            }
-          }
-          Text("Beim Auswählen wird automatisch eine deutsche Hörprobe abgespielt.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-
-        if state.config.tts.provider == "supertonic3" || state.config.tts.provider == "pockettts" {
-          Picker("Modellqualität", selection: $state.config.tts.quality) {
-            Text("Hohe Qualität").tag("high")
-            Text("Schneller").tag("fast")
-          }
-        }
-        if state.config.tts.provider == "pockettts" {
-          Slider(value: $state.config.tts.temperature, in: 0.35...0.9) {
-            Text("Ausdruck")
-          }
-        }
-        Slider(value: $state.config.tts.rate, in: 0.7...1.4) { Text("Sprechtempo") }
-        if state.config.tts.provider == "local_model" {
-          TextField("Lokales TTS-Programm", text: $state.config.tts.localCommand)
-        }
-        if state.config.tts.provider == "macos" {
-          Button("Weitere Apple-Stimmen laden…") { openAppleVoiceSettings() }
-        }
-        Text(state.ttsStatus).font(.caption).foregroundStyle(.secondary)
-        HStack {
-          Button("Deutsche Hörprobe") { state.testTTS() }
-          Button("Einstellungen anwenden") { state.applySpeechSettings() }
-          Button("Lokales Modell vorbereiten") { state.prepareTTSModel() }
-        }
-        Text("STT und TTS laufen vollständig lokal. Nach dem einmaligen Modelldownload werden keine Sprachdaten an einen Cloud-Dienst gesendet.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }.padding().tabItem { Label("Sprache", systemImage: "speaker.wave.2") }
-      Form {
-        Text("MiddleAI Voice").font(.headline)
-        LabeledContent("Linke Optionstaste", value: "Diktat ins aktive Textfeld")
-        LabeledContent("Rechte Optionstaste", value: "Anfrage an OpenWebUI")
-        Text("Kurz drücken startet oder beendet die Aufnahme. Gedrückthalten und Loslassen funktioniert ebenfalls.")
-          .font(.caption)
-        Section("Diktat-Nachbearbeitung") {
-          Toggle(
-            "Diktat vor dem Einfügen lokal glätten",
-            isOn: Binding(
-              get: { state.config.dictation.polishWithLocalAI },
-              set: { state.setDictationPolishing($0) }))
-          Text(
-            "Entfernt Füllwörter und Wortwiederholungen und korrigiert Versprecher sowie Zeichensetzung behutsam. Inhalt, Namen, Zahlen, Fachbegriffe und Anrede sollen unverändert bleiben."
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          Text(state.dictationPolishingStatus)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        Text("Status: \(state.voiceStatus)").font(.caption)
-        Text(
-          "Die Erkennung läuft mit Parakeet TDT v3 lokal auf dem Mac. Beim ersten Start wird das Modell einmalig geladen."
-        ).font(.caption)
-        Text(
-          "Für das Einfügen und die globalen Optionstasten benötigt MiddleAI Mikrofon, Bedienungshilfen und Eingabeüberwachung."
-        ).font(.caption)
-        Button("Datenschutz-Einstellungen öffnen") {
-          if let url = URL(
-            string:
-              "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-          { NSWorkspace.shared.open(url) }
-        }
-        Text("Configuration: \(ConfigLoader.defaultURL.path)").font(.caption)
-      }.padding().tabItem { Label("Voice", systemImage: "waveform.and.mic") }
-    }
-  }
-  private func save() {
-    do {
-      try state.save(password: password)
-      message = "Saved. Testing…"
-      Task {
-        await state.connectAndServe()
-        message = state.status == "Connected" ? "Saved and connected" : "Saved; \(state.lastError)"
-      }
-    } catch { message = error.localizedDescription }
-  }
-  private var providerDescription: String {
-    switch state.config.tts.provider {
-    case "qwen3_tts":
-      return "Qwen3-TTS VoiceDesign erzeugt eine frei gestaltete weibliche Stimme mit neutralem Standarddeutsch lokal über Apple MLX. Die 4-Bit-Version benötigt etwa 2,3 GB."
-    case "voxtral_tts":
-      return "Mistral Voxtral läuft lokal über MLX und bietet eine deutsche Frauenstimme. Die CC-BY-NC-4.0-Modelllizenz schließt kommerzielle Nutzung aus."
-    case "supertonic3":
-      return "Supertonic 3 erzeugt Deutsch mit einem mehrsprachigen Core-ML-Modell in 44,1 kHz. Der erste Download benötigt ungefähr 400 MB; danach läuft alles offline."
-    case "macos":
-      return "Verwendet die in macOS installierten deutschen Stimmen. Zusätzliche und höherwertige Apple-Stimmen lassen sich in den Systemeinstellungen laden."
-    case "pockettts":
-      return "PocketTTS bleibt aus Kompatibilitätsgründen verfügbar. Viele Stimmstile wurden nicht speziell für Deutsch aufgenommen und können deshalb einen Akzent haben."
-    default:
-      return "Startet ein selbst bereitgestelltes lokales TTS-Programm. MiddleAI übergibt ihm ausschließlich den zu sprechenden Text."
-    }
-  }
-  private func openAppleVoiceSettings() {
-    guard let url = URL(
-      string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent")
-    else { return }
-    NSWorkspace.shared.open(url)
+  private var stateWindowTitle: String {
+    needsSetup ? "MiddleAI einrichten" : "MiddleAI Einstellungen"
   }
 }

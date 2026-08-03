@@ -9,6 +9,19 @@ public protocol ConversationStoreProtocol: Sendable {
   func messages(conversationID: String, limit: Int) throws -> [Message]
   func setSetting(key: String, value: String) throws
   func setting(key: String) throws -> String?
+  func deleteAllConversations() throws
+  func deleteConversations(lastUsedBefore date: Date) throws
+  func cacheStatistics() throws -> ConversationCacheStatistics
+}
+
+public struct ConversationCacheStatistics: Equatable, Sendable {
+  public let conversations: Int
+  public let messages: Int
+
+  public init(conversations: Int, messages: Int) {
+    self.conversations = conversations
+    self.messages = messages
+  }
 }
 
 public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecked Sendable {
@@ -17,13 +30,28 @@ public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecke
 
   public init(path: String) throws {
     let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directoryExisted = FileManager.default.fileExists(atPath: directory.path)
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
+    if !directoryExisted
+      || directory.standardizedFileURL.path.hasPrefix(ConfigLoader.defaultDirectory.path + "/")
+    {
+      try FileManager.default.setAttributes(
+        [.posixPermissions: NSNumber(value: Int16(0o700))], ofItemAtPath: directory.path)
+    }
     guard sqlite3_open(path, &db) == SQLITE_OK else {
       throw MiddleAIError.storage("Cannot open SQLite database")
     }
     try execute("PRAGMA journal_mode=WAL;")
     try execute("PRAGMA foreign_keys=ON;")
+    try execute("PRAGMA secure_delete=FAST;")
     try migrate()
+    for databasePath in [path, path + "-wal", path + "-shm"]
+    where FileManager.default.fileExists(atPath: databasePath) {
+      try FileManager.default.setAttributes(
+        [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: databasePath)
+    }
   }
 
   deinit { sqlite3_close(db) }
@@ -159,6 +187,43 @@ public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecke
     }
   }
 
+  public func deleteAllConversations() throws {
+    try execute("BEGIN IMMEDIATE;")
+    do {
+      try execute("DELETE FROM conversations;")
+      try execute("DELETE FROM settings WHERE key='current_conversation_id';")
+      try execute("COMMIT;")
+    } catch {
+      try? execute("ROLLBACK;")
+      throw error
+    }
+  }
+
+  public func deleteConversations(lastUsedBefore date: Date) throws {
+    try withStatement("DELETE FROM conversations WHERE last_used_at < ?") { statement in
+      sqlite3_bind_double(statement, 1, date.timeIntervalSince1970)
+      try stepDone(statement)
+    }
+    if let current = try setting(key: "current_conversation_id"),
+      try conversation(id: current) == nil
+    {
+      try execute("DELETE FROM settings WHERE key='current_conversation_id';")
+    }
+  }
+
+  public func cacheStatistics() throws -> ConversationCacheStatistics {
+    let conversations = try scalarCount("SELECT COUNT(*) FROM conversations")
+    let messages = try scalarCount("SELECT COUNT(*) FROM messages_cache")
+    return ConversationCacheStatistics(conversations: conversations, messages: messages)
+  }
+
+  private func scalarCount(_ sql: String) throws -> Int {
+    try withStatement(sql) { statement in
+      guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+      return Int(sqlite3_column_int64(statement, 0))
+    }
+  }
+
   private func withStatement<T>(_ sql: String, _ body: (OpaquePointer) throws -> T) throws -> T {
     lock.lock()
     defer { lock.unlock() }
@@ -222,6 +287,33 @@ public final class InMemoryConversationStore: ConversationStoreProtocol, @unchec
     lock.withLock { settings[key] = value }
   }
   public func setting(key: String) throws -> String? { lock.withLock { settings[key] } }
+  public func deleteAllConversations() throws {
+    lock.withLock {
+      conversations.removeAll()
+      cached.removeAll()
+      settings["current_conversation_id"] = nil
+    }
+  }
+  public func deleteConversations(lastUsedBefore date: Date) throws {
+    lock.withLock {
+      let removed = Set(
+        conversations.values.filter { $0.lastUsedAt < date }.map(\.id))
+      for id in removed {
+        conversations[id] = nil
+        cached[id] = nil
+      }
+      if let active = settings["current_conversation_id"], removed.contains(active) {
+        settings["current_conversation_id"] = nil
+      }
+    }
+  }
+  public func cacheStatistics() throws -> ConversationCacheStatistics {
+    lock.withLock {
+      ConversationCacheStatistics(
+        conversations: conversations.count,
+        messages: cached.values.reduce(0) { $0 + $1.count })
+    }
+  }
 }
 
 extension NSLock {

@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select a Swift 6.2 Xcode toolchain
         shell: bash
@@ -30,7 +30,7 @@ jobs:
           swift --version
 
       - name: Restore Swift package cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .build
@@ -39,8 +39,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swift62-
 
+      - name: Lint Swift formatting
+        run: swift format lint --recursive Sources Tests Package.swift
+
+      - name: Audit repository policy
+        run: ./scripts/audit-repository.sh
+
       - name: Build
         run: swift build -c debug
 
       - name: Run test suite
         run: swift run -c debug middleai-tests
+
+      - name: Run structured Swift tests with coverage
+        run: swift test -c debug --enable-code-coverage

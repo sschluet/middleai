@@ -11,7 +11,8 @@ public actor SpokenResponseSummarizer {
     for response: String, threshold: Int = 850, maximumWords: Int = 110
   ) async -> String {
     let clean = Self.plainText(response)
-    guard clean.count > threshold || clean.split(whereSeparator: \Character.isWhitespace).count > 150
+    guard
+      clean.count > threshold || clean.split(whereSeparator: \Character.isWhitespace).count > 150
     else { return clean }
 
     #if canImport(FoundationModels)
