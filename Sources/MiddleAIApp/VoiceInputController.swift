@@ -189,7 +189,7 @@ import OSLog
     recordingStartedAt = nil
     let audio = recorder.stop()
     logger.notice(
-      "recording_finished mode=\(mode == .dictation ? "dictation" : "assistant", privacy: .public) duration_ms=\(Int(audio.duration * 1_000), privacy: .public) samples=\(audio.samples.count, privacy: .public) peak=\(audio.peakLevel, privacy: .public) device=\(audio.deviceName, privacy: .public)"
+      "recording_finished mode=\(mode == .dictation ? "dictation" : "assistant", privacy: .public) duration_ms=\(Int(audio.duration * 1_000), privacy: .public) samples=\(audio.samples.count, privacy: .public) sample_rate_hz=\(Int(audio.sampleRate), privacy: .public) peak=\(audio.peakLevel, privacy: .public) device=\(audio.deviceName, privacy: .public)"
     )
     let target = dictationTarget
     dictationTarget = nil

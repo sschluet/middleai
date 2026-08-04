@@ -34,7 +34,7 @@ enum VoiceCaptureError: LocalizedError {
 }
 
 final class MicrophoneRecorder: @unchecked Sendable {
-  private let engine = AVAudioEngine()
+  private var engine: AVAudioEngine?
   private let lock = NSLock()
   private var chunks: [[Float]] = []
   private var captureSampleRate = 0.0
@@ -43,9 +43,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var tapInstalled = false
 
   func start(deviceUID: String, onLevel: @escaping @Sendable (Float) -> Void) throws {
-    if tapInstalled { _ = stop() }
-    engine.reset()
-    let input = engine.inputNode
+    if engine != nil { _ = stop() }
+    // A fresh engine prevents stale Core Audio device IDs after USB, display or default-device
+    // changes. Reusing the previous input node can leave AVAudioEngine bound to a device that
+    // macOS has already replaced.
+    let recordingEngine = AVAudioEngine()
+    let input = recordingEngine.inputNode
     guard let device = AudioInputDeviceCatalog.selectedDevice(for: deviceUID) else {
       throw AudioInputDeviceError.unavailable
     }
@@ -55,57 +58,60 @@ final class MicrophoneRecorder: @unchecked Sendable {
     if deviceUID != AudioInputDeviceCatalog.systemDefaultUID {
       try AudioInputDeviceCatalog.apply(device, to: audioUnit)
     }
-    let hardwareFormat = input.outputFormat(forBus: 0)
-    guard hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 else {
+    let availableFormat = input.outputFormat(forBus: 0)
+    guard availableFormat.sampleRate > 0, availableFormat.channelCount > 0 else {
       throw VoiceCaptureError.microphoneUnavailable
     }
-    guard
-      let format = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: hardwareFormat.sampleRate, channels: 1,
-        interleaved: false)
-    else { throw VoiceCaptureError.microphoneUnavailable }
 
     lock.withVoiceLock {
       chunks.removeAll(keepingCapacity: true)
-      captureSampleRate = format.sampleRate
+      captureSampleRate = 0
       peakLevel = 0
       startedAt = Date()
       activeDeviceName = device.name
     }
 
-    input.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
-      guard let self, let channel = buffer.floatChannelData?.pointee else { return }
-      let count = Int(buffer.frameLength)
-      guard count > 0 else { return }
-      let samples = Array(UnsafeBufferPointer(start: channel, count: count))
+    // Passing nil is intentional: AVAudioEngine chooses the input node's negotiated format at
+    // the instant the tap is installed. Constructing a mono format from an earlier query races
+    // devices such as USB speakerphones that renegotiate between 16, 44.1 and 48 kHz on start.
+    input.installTap(onBus: 0, bufferSize: 1_024, format: nil) { [weak self] buffer, _ in
+      guard let self else { return }
+      let samples = Self.monoSamples(from: buffer)
+      guard !samples.isEmpty else { return }
       var sum: Float = 0
       for sample in samples { sum += sample * sample }
-      let rms = sqrt(sum / Float(count))
+      let rms = sqrt(sum / Float(samples.count))
       let decibels = 20 * log10(max(rms, 0.000_001))
       let normalized = min(1, max(0, (decibels + 55) / 55))
       self.lock.withVoiceLock {
+        if self.captureSampleRate == 0 { self.captureSampleRate = buffer.format.sampleRate }
         self.chunks.append(samples)
         self.peakLevel = max(self.peakLevel, normalized)
       }
       onLevel(normalized)
     }
     tapInstalled = true
-    engine.prepare()
+    engine = recordingEngine
+    recordingEngine.prepare()
     do {
-      try engine.start()
+      try recordingEngine.start()
     } catch {
       input.removeTap(onBus: 0)
       tapInstalled = false
+      engine = nil
       throw error
     }
   }
 
   func stop() -> CapturedAudio {
-    if tapInstalled {
-      engine.inputNode.removeTap(onBus: 0)
+    let recordingEngine = engine
+    if tapInstalled, let recordingEngine {
+      recordingEngine.inputNode.removeTap(onBus: 0)
       tapInstalled = false
     }
-    engine.stop()
+    recordingEngine?.stop()
+    recordingEngine?.reset()
+    engine = nil
     return lock.withVoiceLock {
       let samples = chunks.flatMap { $0 }
       let rate = captureSampleRate
@@ -125,6 +131,37 @@ final class MicrophoneRecorder: @unchecked Sendable {
   func cancel() { _ = stop() }
 
   private var activeDeviceName = "Unbekanntes Mikrofon"
+
+  private static func monoSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
+    guard buffer.format.commonFormat == .pcmFormatFloat32,
+      let channelData = buffer.floatChannelData
+    else { return [] }
+    let frameCount = Int(buffer.frameLength)
+    let channelCount = Int(buffer.format.channelCount)
+    guard frameCount > 0, channelCount > 0 else { return [] }
+
+    var result = [Float](repeating: 0, count: frameCount)
+    if buffer.format.isInterleaved {
+      let source = channelData[0]
+      for frame in 0..<frameCount {
+        var mixed: Float = 0
+        for channel in 0..<channelCount {
+          mixed += source[frame * channelCount + channel]
+        }
+        result[frame] = mixed / Float(channelCount)
+      }
+    } else {
+      for channel in 0..<channelCount {
+        let source = channelData[channel]
+        for frame in 0..<frameCount { result[frame] += source[frame] }
+      }
+      if channelCount > 1 {
+        let scale = Float(channelCount)
+        for frame in result.indices { result[frame] /= scale }
+      }
+    }
+    return result
+  }
 }
 
 actor ParakeetTranscriber {
