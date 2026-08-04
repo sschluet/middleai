@@ -53,8 +53,11 @@ struct TextInsertionResult {
       smartFormatting && formattingEnabledForTarget
       ? DictationFormatter.format(text)
       : FormattedDictation(plainText: text, html: "", didApplyFormatting: false)
+    let profile = InsertionProfile(bundleIdentifier: target.bundleIdentifier)
+    let refreshedElement = refreshedFocusedElement(for: target)
 
-    if !formatted.didApplyFormatting, let focusedElement = target.focusedElement,
+    if !formatted.didApplyFormatting, !profile.prefersClipboard,
+      let focusedElement = refreshedElement,
       let direct = try await insertWithAccessibility(
         formatted.plainText, into: focusedElement, application: target.application)
     {
@@ -82,7 +85,6 @@ struct TextInsertionResult {
     guard pasteboard.writeObjects([item]) else { throw VoiceInputError.couldNotInsertText }
     let transcriptChangeCount = pasteboard.changeCount
     let profile = InsertionProfile(bundleIdentifier: target.bundleIdentifier)
-    let verificationSnapshot = target.focusedElement.flatMap(textSnapshot(of:))
     do {
       if let application = target.application {
         guard !application.isTerminated else { throw VoiceInputError.targetApplicationUnavailable }
@@ -93,21 +95,33 @@ struct TextInsertionResult {
         guard application.isActive else { throw VoiceInputError.targetApplicationUnavailable }
       }
       try await Task.sleep(for: .seconds(profile.activationDelay))
+      // SwiftUI, Electron and Office editors can replace their AX text element while speech is
+      // being transcribed. Always reacquire it after restoring the target application instead of
+      // verifying against the stale element captured when recording began.
+      let verificationElement = refreshedFocusedElement(for: target)
+      let verificationSnapshot = verificationElement.flatMap(textSnapshot(of:))
       guard postPasteShortcut() else { throw VoiceInputError.couldNotInsertText }
       let verified = try await verifyClipboardInsertion(
-        formatted.plainText, element: target.focusedElement, snapshot: verificationSnapshot,
+        formatted.plainText, element: verificationElement, snapshot: verificationSnapshot,
         timeout: profile.pasteCompletionDelay)
       if !verified, let verificationSnapshot,
-        currentText(of: target.focusedElement) == verificationSnapshot.text
+        profile.allowsVerificationRetry,
+        textsMatch(currentText(of: verificationElement), verificationSnapshot.text)
       {
         guard postPasteShortcut() else { throw VoiceInputError.couldNotInsertText }
-        guard
-          try await verifyClipboardInsertion(
-            formatted.plainText, element: target.focusedElement, snapshot: verificationSnapshot,
-            timeout: profile.pasteCompletionDelay)
-        else { throw VoiceInputError.couldNotVerifyTextInsertion }
-      } else if !verified, verificationSnapshot != nil {
-        throw VoiceInputError.couldNotVerifyTextInsertion
+        let verifiedAfterRetry = try await verifyClipboardInsertion(
+          formatted.plainText, element: verificationElement, snapshot: verificationSnapshot,
+          timeout: profile.pasteCompletionDelay)
+        if !verifiedAfterRetry,
+          textsMatch(currentText(of: verificationElement), verificationSnapshot.text)
+        {
+          throw VoiceInputError.couldNotVerifyTextInsertion
+        }
+        if pasteboard.changeCount == transcriptChangeCount {
+          restoreClipboard(saved, to: pasteboard)
+        }
+        return TextInsertionResult(
+          formatted: formatted, method: .clipboard, verified: verifiedAfterRetry)
       }
       if pasteboard.changeCount == transcriptChangeCount { restoreClipboard(saved, to: pasteboard) }
       return TextInsertionResult(
@@ -118,8 +132,9 @@ struct TextInsertionResult {
     }
   }
 
-  /// Returns nil when direct AX insertion is unsupported and the clipboard fallback is safe.
-  /// Once AX reports success, a failed verification is surfaced instead of pasting a duplicate.
+  /// Returns nil when direct AX insertion is unsupported or left the field unchanged, allowing a
+  /// single clipboard attempt. A changed but normalized value is treated as unverified success so
+  /// rich accessibility representations cannot cause a duplicate paste.
   private func insertWithAccessibility(
     _ text: String, into element: AXUIElement, application: NSRunningApplication?
   ) async throws -> Bool? {
@@ -136,11 +151,13 @@ struct TextInsertionResult {
       element, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
     guard status == .success else { return nil }
     let expected = snapshot.replacingSelection(with: text)
-    for _ in 0..<6 {
-      if currentText(of: element) == expected { return true }
-      try await Task.sleep(for: .milliseconds(35))
+    var observed = snapshot.text
+    for _ in 0..<16 {
+      observed = currentText(of: element) ?? observed
+      if textsMatch(observed, expected) { return true }
+      try await Task.sleep(for: .milliseconds(50))
     }
-    throw VoiceInputError.couldNotVerifyTextInsertion
+    return textsMatch(observed, snapshot.text) ? nil : false
   }
 
   private func verifyClipboardInsertion(
@@ -153,7 +170,7 @@ struct TextInsertionResult {
     let expected = snapshot.replacingSelection(with: insertedText)
     let deadline = Date().addingTimeInterval(max(0.2, timeout))
     repeat {
-      if currentText(of: element) == expected { return true }
+      if textsMatch(currentText(of: element), expected) { return true }
       try await Task.sleep(for: .milliseconds(50))
     } while Date() < deadline
     return false
@@ -168,6 +185,15 @@ struct TextInsertionResult {
       let value, CFGetTypeID(value) == AXUIElementGetTypeID()
     else { return nil }
     return unsafeDowncast(value as AnyObject, to: AXUIElement.self)
+  }
+
+  private func refreshedFocusedElement(for target: DictationTarget) -> AXUIElement? {
+    if let application = target.application, !application.isTerminated,
+      let current = focusedElement(for: application.processIdentifier)
+    {
+      return current
+    }
+    return target.focusedElement
   }
 
   private func currentText(of element: AXUIElement?) -> String? {
@@ -199,6 +225,17 @@ struct TextInsertionResult {
       AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success
     else { return false }
     return (value as? String) == kAXSecureTextFieldSubrole
+  }
+
+  private func textsMatch(_ value: String?, _ expected: String) -> Bool {
+    guard let value else { return false }
+    func normalized(_ text: String) -> String {
+      text.replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+        .replacingOccurrences(of: "\u{00A0}", with: " ")
+        .precomposedStringWithCanonicalMapping
+    }
+    return normalized(value) == normalized(expected)
   }
 
   private func postPasteShortcut() -> Bool {
@@ -250,18 +287,26 @@ struct TextInsertionResult {
   private struct InsertionProfile {
     let activationDelay: TimeInterval
     let pasteCompletionDelay: TimeInterval
+    let prefersClipboard: Bool
+    let allowsVerificationRetry: Bool
 
     init(bundleIdentifier: String?) {
       switch bundleIdentifier?.lowercased() {
       case "com.microsoft.word", "com.microsoft.powerpoint", "com.microsoft.outlook":
         activationDelay = 0.18
         pasteCompletionDelay = 0.65
+        prefersClipboard = true
+        allowsVerificationRetry = false
       case "ch.protonmail.desktop":
         activationDelay = 0.15
         pasteCompletionDelay = 0.45
+        prefersClipboard = true
+        allowsVerificationRetry = false
       default:
         activationDelay = 0.12
         pasteCompletionDelay = 0.35
+        prefersClipboard = false
+        allowsVerificationRetry = true
       }
     }
   }

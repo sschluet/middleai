@@ -2,6 +2,15 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.5.1 — 2026-08-04
+
+### Dictation
+
+- Fixed false insertion errors caused by stale Accessibility elements in SwiftUI, Electron and Microsoft Office editors.
+- Reacquired the active text field after returning focus to the target application.
+- Prevented verification retries from duplicating text in rich-text editors and normalized line endings during verification.
+- Added privacy-safe insertion diagnostics without recording dictated content.
+
 ## 0.5.0 — 2026-08-04
 
 ### Reliability

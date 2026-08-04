@@ -290,6 +290,11 @@ import OSLog
       let inserted = try await insertion.insert(
         text, into: destination, smartFormatting: dictationConfig.smartFormatting,
         formattingApplicationIDs: dictationConfig.formattingApplications)
+      let insertionMethod =
+        inserted.method == .accessibility ? "accessibility" : "clipboard"
+      logger.notice(
+        "dictation_inserted app=\(destination.bundleIdentifier ?? "unknown", privacy: .public) method=\(insertionMethod, privacy: .public) verified=\(inserted.verified, privacy: .public)"
+      )
       overlay.update(phase: .result, detail: inserted.formatted.plainText)
       overlay.hide(after: 1.4)
       if !inserted.verified {
