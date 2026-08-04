@@ -33,29 +33,49 @@ enum VoiceCaptureError: LocalizedError {
   }
 }
 
+enum VoiceCaptureStopReason: Sendable {
+  case maximumDuration
+  case silence
+  case audioDeviceChanged
+}
+
 final class MicrophoneRecorder: @unchecked Sendable {
   private var engine: AVAudioEngine?
   private let lock = NSLock()
-  private var chunks: [[Float]] = []
-  private var captureSampleRate = 0.0
+  private var accumulator = VoiceSampleAccumulator()
   private var peakLevel: Float = 0
   private var startedAt: Date?
   private var tapInstalled = false
+  private var speechDetected = false
+  private var silentSampleCount = 0
+  private var automaticSilenceStop = false
+  private var stopRequested = false
+  private var lastLevelUptime: TimeInterval = 0
+  private var configurationObserver: NSObjectProtocol?
 
-  func start(deviceUID: String, onLevel: @escaping @Sendable (Float) -> Void) throws {
+  func start(
+    deviceUID: String, maximumDuration: TimeInterval = 120,
+    automaticSilenceStop: Bool = false,
+    onLevel: @escaping @Sendable (Float) -> Void,
+    onAutomaticStop: @escaping @Sendable (VoiceCaptureStopReason) -> Void = { _ in }
+  ) throws {
     if engine != nil { _ = stop() }
     // A fresh engine prevents stale Core Audio device IDs after USB, display or default-device
     // changes. Reusing the previous input node can leave AVAudioEngine bound to a device that
     // macOS has already replaced.
     let recordingEngine = AVAudioEngine()
     let input = recordingEngine.inputNode
-    guard let device = AudioInputDeviceCatalog.selectedDevice(for: deviceUID) else {
+    let requestedDevice = AudioInputDeviceCatalog.selectedDevice(for: deviceUID)
+    guard
+      let device = requestedDevice
+        ?? AudioInputDeviceCatalog.selectedDevice(for: AudioInputDeviceCatalog.systemDefaultUID)
+    else {
       throw AudioInputDeviceError.unavailable
     }
     guard let audioUnit = input.audioUnit else { throw VoiceCaptureError.microphoneUnavailable }
     // AVAudioEngine already follows the current macOS input device. Only override
     // the AudioUnit when the user deliberately pinned a concrete microphone.
-    if deviceUID != AudioInputDeviceCatalog.systemDefaultUID {
+    if deviceUID != AudioInputDeviceCatalog.systemDefaultUID, requestedDevice != nil {
       try AudioInputDeviceCatalog.apply(device, to: audioUnit)
     }
     let availableFormat = input.outputFormat(forBus: 0)
@@ -64,11 +84,15 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
 
     lock.withVoiceLock {
-      chunks.removeAll(keepingCapacity: true)
-      captureSampleRate = 0
+      accumulator = VoiceSampleAccumulator(maximumDuration: maximumDuration)
       peakLevel = 0
       startedAt = Date()
-      activeDeviceName = device.name
+      activeDeviceName = requestedDevice == nil ? "\(device.name) (macOS-Standard)" : device.name
+      speechDetected = false
+      silentSampleCount = 0
+      self.automaticSilenceStop = automaticSilenceStop
+      stopRequested = false
+      lastLevelUptime = 0
     }
 
     // Passing nil is intentional: AVAudioEngine chooses the input node's negotiated format at
@@ -83,18 +107,58 @@ final class MicrophoneRecorder: @unchecked Sendable {
       let rms = sqrt(sum / Float(samples.count))
       let decibels = 20 * log10(max(rms, 0.000_001))
       let normalized = min(1, max(0, (decibels + 55) / 55))
-      self.lock.withVoiceLock {
-        if self.captureSampleRate == 0 { self.captureSampleRate = buffer.format.sampleRate }
-        self.chunks.append(samples)
+      let now = ProcessInfo.processInfo.systemUptime
+      let event: VoiceCaptureStopReason? = self.lock.withVoiceLock {
+        let previousCount = self.accumulator.sampleCount
+        let reachedLimit = self.accumulator.append(
+          samples, sampleRate: buffer.format.sampleRate)
+        let appendedCount = self.accumulator.sampleCount - previousCount
         self.peakLevel = max(self.peakLevel, normalized)
+        if normalized >= 0.045 {
+          self.speechDetected = true
+          self.silentSampleCount = 0
+        } else if self.speechDetected {
+          self.silentSampleCount += appendedCount
+        }
+        guard !self.stopRequested else { return nil }
+        if reachedLimit {
+          self.stopRequested = true
+          return .maximumDuration
+        }
+        if self.automaticSilenceStop, self.accumulator.duration >= 1.0,
+          self.speechDetected,
+          self.silentSampleCount >= Int(self.accumulator.targetSampleRate * 1.35)
+        {
+          self.stopRequested = true
+          return .silence
+        }
+        return nil
       }
-      onLevel(normalized)
+      let shouldReportLevel = self.lock.withVoiceLock {
+        guard now - self.lastLevelUptime >= 1.0 / 15.0 else { return false }
+        self.lastLevelUptime = now
+        return true
+      }
+      if shouldReportLevel { onLevel(normalized) }
+      if let event { onAutomaticStop(event) }
     }
     tapInstalled = true
     engine = recordingEngine
     recordingEngine.prepare()
     do {
       try recordingEngine.start()
+      configurationObserver = NotificationCenter.default.addObserver(
+        forName: Notification.Name.AVAudioEngineConfigurationChange,
+        object: recordingEngine, queue: nil
+      ) { [weak self] _ in
+        guard let self else { return }
+        let shouldStop = self.lock.withVoiceLock {
+          guard !self.stopRequested else { return false }
+          self.stopRequested = true
+          return true
+        }
+        if shouldStop { onAutomaticStop(.audioDeviceChanged) }
+      }
     } catch {
       input.removeTap(onBus: 0)
       tapInstalled = false
@@ -112,18 +176,23 @@ final class MicrophoneRecorder: @unchecked Sendable {
     recordingEngine?.stop()
     recordingEngine?.reset()
     engine = nil
+    if let configurationObserver {
+      NotificationCenter.default.removeObserver(configurationObserver)
+      self.configurationObserver = nil
+    }
     return lock.withVoiceLock {
-      let samples = chunks.flatMap { $0 }
-      let rate = captureSampleRate
-      let duration = rate > 0 ? Double(samples.count) / rate : 0
+      let duration = accumulator.duration
+      let samples = accumulator.removeSamples()
       let result = CapturedAudio(
-        samples: samples, sampleRate: rate, duration: duration, peakLevel: peakLevel,
+        samples: samples, sampleRate: 16_000, duration: duration, peakLevel: peakLevel,
         deviceName: activeDeviceName)
-      chunks.removeAll(keepingCapacity: true)
-      captureSampleRate = 0
       peakLevel = 0
       startedAt = nil
       activeDeviceName = "Unbekanntes Mikrofon"
+      speechDetected = false
+      silentSampleCount = 0
+      automaticSilenceStop = false
+      stopRequested = false
       return result
     }
   }

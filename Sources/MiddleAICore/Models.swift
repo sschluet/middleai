@@ -94,27 +94,6 @@ public struct ConversationContext: Sendable {
   }
 }
 
-public struct Profile: Codable, Equatable, Sendable {
-  public var name: String
-  public var model: String
-  public var systemPrompt: String?
-  public var temperature: Double?
-  public var ttsVoice: String?
-  public var knowledgeCollection: String?
-
-  public init(
-    name: String, model: String = "", systemPrompt: String? = nil, temperature: Double? = nil,
-    ttsVoice: String? = nil, knowledgeCollection: String? = nil
-  ) {
-    self.name = name
-    self.model = model
-    self.systemPrompt = systemPrompt
-    self.temperature = temperature
-    self.ttsVoice = ttsVoice
-    self.knowledgeCollection = knowledgeCollection
-  }
-}
-
 public enum MiddleAIError: LocalizedError, Equatable {
   case configuration(String)
   case storage(String)

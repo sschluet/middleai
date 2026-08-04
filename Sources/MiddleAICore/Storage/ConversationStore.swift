@@ -6,6 +6,9 @@ public protocol ConversationStoreProtocol: Sendable {
   func conversation(id: String) throws -> Conversation?
   func recentConversations(limit: Int) throws -> [Conversation]
   func saveMessage(_ message: Message, conversationID: String) throws
+  func saveExchange(
+    user: Message, assistant: Message, conversation: Conversation
+  ) throws
   func messages(conversationID: String, limit: Int) throws -> [Message]
   func setSetting(key: String, value: String) throws
   func setting(key: String) throws -> String?
@@ -154,9 +157,27 @@ public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecke
     }
   }
 
+  public func saveExchange(
+    user: Message, assistant: Message, conversation: Conversation
+  ) throws {
+    lock.lock()
+    defer { lock.unlock() }
+    try execute("BEGIN IMMEDIATE;")
+    do {
+      try saveConversation(conversation)
+      try saveMessage(user, conversationID: conversation.id)
+      try saveMessage(assistant, conversationID: conversation.id)
+      try setSetting(key: "current_conversation_id", value: conversation.id)
+      try execute("COMMIT;")
+    } catch {
+      try? execute("ROLLBACK;")
+      throw error
+    }
+  }
+
   public func messages(conversationID: String, limit: Int = 30) throws -> [Message] {
     try withStatement(
-      "SELECT id,role,content,timestamp FROM (SELECT * FROM messages_cache WHERE conversation_id=? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp"
+      "SELECT id,role,content,timestamp FROM (SELECT rowid AS insertion_order,* FROM messages_cache WHERE conversation_id=? ORDER BY timestamp DESC,insertion_order DESC LIMIT ?) ORDER BY timestamp,insertion_order"
     ) { s in
       bind(conversationID, 1, s)
       sqlite3_bind_int(s, 2, Int32(limit))
@@ -279,6 +300,15 @@ public final class InMemoryConversationStore: ConversationStoreProtocol, @unchec
   }
   public func saveMessage(_ m: Message, conversationID: String) throws {
     lock.withLock { cached[conversationID, default: []].append(m) }
+  }
+  public func saveExchange(
+    user: Message, assistant: Message, conversation: Conversation
+  ) throws {
+    lock.withLock {
+      conversations[conversation.id] = conversation
+      cached[conversation.id, default: []].append(contentsOf: [user, assistant])
+      settings["current_conversation_id"] = conversation.id
+    }
   }
   public func messages(conversationID: String, limit: Int) throws -> [Message] {
     lock.withLock { Array(cached[conversationID, default: []].suffix(limit)) }

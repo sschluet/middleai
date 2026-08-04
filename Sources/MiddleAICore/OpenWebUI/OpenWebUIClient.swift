@@ -32,15 +32,11 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
     let text: String
     let finishReason: String?
     let requestedToolCall: Bool
-
-    var isComplete: Bool {
-      !requestedToolCall && finishReason != "length"
-    }
   }
 
   private struct PersistedAssistant: Sendable {
     let text: String
-    let done: Bool
+    let done: Bool?
   }
 
   private struct AsyncTaskResponse: Decodable, Sendable {
@@ -93,7 +89,7 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
 
   private enum StreamOutcome: Sendable {
     case completed(CompletionResult)
-    case asynchronous
+    case asynchronous(taskIDs: [String])
   }
 
   private enum StreamingFailure: Error, Sendable {
@@ -185,12 +181,16 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
     ]
     let initial: CompletionResult
     do {
-      switch try await stream(path: "api/chat/completions", json: body, onToken: onToken) {
+      switch try await stream(
+        path: "api/chat/completions", json: body,
+        deliverProvisionalTokens: true, onToken: onToken)
+      {
       case .completed(let streamed):
         initial = try validated(streamed)
-      case .asynchronous:
+      case .asynchronous(let taskIDs):
         let persisted = try await waitForAssistant(
-          chatID: chatID, assistantID: assistantID, onToken: onToken)
+          chatID: chatID, assistantID: assistantID, expectedTaskIDs: taskIDs,
+          onToken: onToken)
         initial = CompletionResult(text: persisted, finishReason: "stop", requestedToolCall: false)
       }
     } catch let StreamingFailure.rejected(status, _) where Self.supportsNonStreamingFallback(status)
@@ -199,14 +199,22 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
       // HTTP. Retrying is safe here because a rejected request did not start a generation.
       body["stream"] = false
       let data = try await request(path: "api/chat/completions", method: "POST", json: body).0
-      if isAsyncTaskResponse(data) {
+      if let taskIDs = asyncTaskIDs(from: data) {
         let persisted = try await waitForAssistant(
-          chatID: chatID, assistantID: assistantID, onToken: onToken)
+          chatID: chatID, assistantID: assistantID, expectedTaskIDs: taskIDs,
+          onToken: onToken)
         initial = CompletionResult(text: persisted, finishReason: "stop", requestedToolCall: false)
       } else {
-        let completion = try validated(completionResult(from: data))
-        onToken(completion.text)
-        initial = completion
+        let completion = try completionResult(from: data)
+        if completion.requestedToolCall {
+          let persisted = try await waitForAssistant(
+            chatID: chatID, assistantID: assistantID, expectedTaskIDs: [], onToken: onToken)
+          initial = CompletionResult(
+            text: persisted, finishReason: "stop", requestedToolCall: false)
+        } else {
+          initial = try validated(completion)
+          onToken(completion.text)
+        }
       }
     } catch let StreamingFailure.rejected(status, detail) {
       let suffix = detail.map { ": \($0)" } ?? ""
@@ -223,12 +231,14 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
         "title_generation": true, "tags_generation": false, "follow_up_generation": false,
       ],
     ]
-    let finalizedData = try await request(
+    var finalized = initial.text
+    if let finalizedData = try? await request(
       path: "api/chat/completed", method: "POST", json: completionBody
-    ).0
+    ).0 {
+      finalized = completionTextIfPresent(from: finalizedData) ?? finalized
+    }
     try Task.checkCancellation()
-    let finalized = completionTextIfPresent(from: finalizedData) ?? initial.text
-    _ = try await request(
+    _ = try? await request(
       path: "api/v1/chats/\(chatID)", method: "POST",
       json: [
         "chat": chatSnapshot(
@@ -340,24 +350,51 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
     }
     return nil
   }
-  private func isAsyncTaskResponse(_ data: Data) -> Bool {
-    (try? JSONDecoder().decode(AsyncTaskResponse.self, from: data).accepted) == true
+  private func asyncTaskIDs(from data: Data) -> [String]? {
+    guard let response = try? JSONDecoder().decode(AsyncTaskResponse.self, from: data),
+      response.accepted
+    else { return nil }
+    return response.taskIDs ?? []
   }
   private func waitForAssistant(
     chatID: String, assistantID: String,
+    expectedTaskIDs: [String],
     onToken: @escaping @Sendable (String) -> Void
   ) async throws -> String {
     let deadline = Date().addingTimeInterval(180)
     var delivered = ""
+    var lastSnapshot = ""
+    var stablePolls = 0
+    var observedActiveTask = !expectedTaskIDs.isEmpty
     while Date() < deadline {
       try Task.checkCancellation()
       let (data, _) = try await request(path: "api/v1/chats/\(chatID)")
       if let assistant = assistantText(from: data, assistantID: assistantID) {
+        if assistant.text == lastSnapshot {
+          stablePolls += 1
+        } else {
+          lastSnapshot = assistant.text
+          stablePolls = 0
+        }
         delivered = emitNewContent(assistant.text, after: delivered, onToken: onToken)
-        if assistant.done,
+        if assistant.done == true,
           !assistant.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
           return assistant.text
+        }
+        if assistant.done == nil,
+          !assistant.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+          if let activeTasks = await activeTaskIDs(chatID: chatID) {
+            if !activeTasks.isEmpty { observedActiveTask = true }
+            if activeTasks.isEmpty, observedActiveTask, stablePolls >= 1,
+              !Self.isLikelyToolPreamble(assistant.text)
+            {
+              return assistant.text
+            }
+          } else if stablePolls >= 12, !Self.isLikelyToolPreamble(assistant.text) {
+            return assistant.text
+          }
         }
       }
       try await Task.sleep(for: .milliseconds(350))
@@ -374,27 +411,55 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
     if let message = historyMessages?[assistantID],
       let content = assistantMessageText(message)
     {
-      return PersistedAssistant(text: content, done: message["done"] as? Bool == true)
+      return PersistedAssistant(text: content, done: completionFlag(message))
     }
     if let currentID = history?["currentId"] as? String,
       let message = historyMessages?[currentID], message["role"] as? String == "assistant",
       let content = assistantMessageText(message)
     {
-      return PersistedAssistant(text: content, done: message["done"] as? Bool == true)
+      return PersistedAssistant(text: content, done: completionFlag(message))
     }
     if let messages = chat["messages"] as? [[String: Any]] {
       if let message = messages.first(where: { $0["id"] as? String == assistantID }),
         let content = assistantMessageText(message)
       {
-        return PersistedAssistant(text: content, done: message["done"] as? Bool == true)
+        return PersistedAssistant(text: content, done: completionFlag(message))
       }
       if let message = messages.reversed().first(where: {
         $0["role"] as? String == "assistant"
       }), let content = assistantMessageText(message) {
-        return PersistedAssistant(text: content, done: message["done"] as? Bool == true)
+        return PersistedAssistant(text: content, done: completionFlag(message))
       }
     }
     return nil
+  }
+
+  private func completionFlag(_ message: [String: Any]) -> Bool? {
+    if let done = message["done"] as? Bool { return done }
+    if let status = message["status"] as? String {
+      if ["complete", "completed", "done", "success"].contains(status.lowercased()) {
+        return true
+      }
+      if ["pending", "running", "in_progress"].contains(status.lowercased()) { return false }
+    }
+    return nil
+  }
+
+  private func activeTaskIDs(chatID: String) async -> [String]? {
+    guard let data = try? await request(path: "api/tasks/chat/\(chatID)").0,
+      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    return root["task_ids"] as? [String]
+  }
+
+  private static func isLikelyToolPreamble(_ text: String) -> Bool {
+    let normalized = text.folding(
+      options: [.diacriticInsensitive, .caseInsensitive], locale: .current
+    ).lowercased()
+    return [
+      "ich starte", "ich recherchiere", "ich suche", "ich prüfe", "ich schaue nach",
+      "i will search", "i'll search", "let me search", "i will research", "let me check",
+    ].contains(where: normalized.contains)
   }
 
   private func options(for model: String) async throws -> ModelOptions {
@@ -476,16 +541,14 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
       return candidate
     }
     if delivered.hasPrefix(candidate) { return delivered }
-    // Persisted messages can be rewritten while a tool is running. Preserve already delivered
-    // text and emit only a newly appended suffix; speaking the whole snapshot would duplicate it.
-    let common = candidate.commonPrefix(with: delivered)
-    let suffix = String(candidate.dropFirst(common.count))
-    if !suffix.isEmpty { onToken(suffix) }
-    return candidate
+    // Tool runs can replace a preamble with the actual answer. Do not append the rewritten body
+    // to already delivered text; MiddleAIEngine reconciles the canonical final response once.
+    return delivered
   }
 
   private func stream(
-    path: String, json: [String: Any], onToken: @escaping @Sendable (String) -> Void
+    path: String, json: [String: Any], deliverProvisionalTokens: Bool,
+    onToken: @escaping @Sendable (String) -> Void
   ) async throws -> StreamOutcome {
     let request = try authorized(path, method: "POST", json: json)
     let (bytes, response) = try await session.bytes(for: request)
@@ -497,6 +560,8 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
     var finishReason: String?
     var requestedToolCall = false
     var sawSSE = false
+    var taskIDs: [String] = []
+    var explicitDone = false
     for try await line in bytes.lines {
       try Task.checkCancellation()
       guard line.hasPrefix("data:") else {
@@ -508,14 +573,28 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
       }
       sawSSE = true
       let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-      guard payload != "[DONE]", let data = payload.data(using: .utf8) else { continue }
+      if payload == "[DONE]" {
+        explicitDone = true
+        continue
+      }
+      guard let data = payload.data(using: .utf8) else { continue }
+      if let asynchronous = try? JSONDecoder().decode(AsyncTaskResponse.self, from: data),
+        asynchronous.accepted
+      {
+        taskIDs = asynchronous.taskIDs ?? []
+        continue
+      }
       if let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) {
         if let choice = chunk.choices?.first {
           if let token = choice.delta?.content, !token.isEmpty {
             full += token
-            onToken(token)
+            if deliverProvisionalTokens { onToken(token) }
           } else if let snapshot = choice.message?.content, !snapshot.isEmpty {
-            full = emitNewContent(snapshot, after: full, onToken: onToken)
+            if deliverProvisionalTokens {
+              full = emitNewContent(snapshot, after: full, onToken: onToken)
+            } else {
+              full = snapshot
+            }
           }
           requestedToolCall =
             requestedToolCall || !(choice.delta?.toolCalls ?? []).isEmpty
@@ -524,30 +603,58 @@ public final class OpenWebUIClient: AssistantClientProtocol, @unchecked Sendable
         } else if let token = chunk.data?.content ?? chunk.content, !token.isEmpty {
           // OpenWebUI-specific chat:completion events carry incremental content here.
           full += token
-          onToken(token)
+          if deliverProvisionalTokens { onToken(token) }
         }
+        explicitDone = explicitDone || chunk.data?.done == true || chunk.done == true
       }
     }
     guard (200..<300).contains(http.statusCode) else {
       let detail = responseDetail(from: raw)
       throw StreamingFailure.rejected(status: http.statusCode, detail: detail)
     }
-    if !full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if finishReason == "length" {
       return .completed(
         CompletionResult(
           text: full, finishReason: finishReason, requestedToolCall: requestedToolCall))
     }
-    if isAsyncTaskResponse(raw) || raw.isEmpty || sawSSE {
-      return .asynchronous
+    if finishReason == "content_filter" {
+      throw MiddleAIError.invalidResponse(
+        "OpenWebUI hat die Antwort wegen eines Inhaltsfilters beendet.")
+    }
+    if finishReason == "error" {
+      throw MiddleAIError.network("OpenWebUI hat die laufende Antwort mit einem Fehler beendet.")
+    }
+    if let finishReason,
+      !["stop", "tool_calls", "function_call"].contains(finishReason)
+    {
+      throw MiddleAIError.invalidResponse(
+        "OpenWebUI meldet den unbekannten Abschlussgrund \(finishReason).")
+    }
+    let terminal = finishReason == "stop" || (finishReason == nil && explicitDone)
+    if terminal, taskIDs.isEmpty, !requestedToolCall,
+      !full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      if !deliverProvisionalTokens { onToken(full) }
+      return .completed(
+        CompletionResult(
+          text: full, finishReason: finishReason, requestedToolCall: requestedToolCall))
+    }
+    if let asynchronousIDs = asyncTaskIDs(from: raw) {
+      taskIDs = asynchronousIDs
+    }
+    if !taskIDs.isEmpty || raw.isEmpty || sawSSE || requestedToolCall {
+      return .asynchronous(taskIDs: taskIDs)
     }
     if let result = try? completionResult(from: raw) {
-      onToken(result.text)
-      return .completed(result)
+      if result.requestedToolCall { return .asynchronous(taskIDs: taskIDs) }
+      let completed = try validated(result)
+      onToken(completed.text)
+      return .completed(completed)
     }
     // WebUI-shaped streaming requests may deliberately return an empty acknowledgement and
     // publish chunks through its socket channel. Polling the persisted assistant is the portable
     // HTTP fallback and still delivers incremental changes to MiddleAI.
-    return .asynchronous
+    return .asynchronous(taskIDs: taskIDs)
   }
   private func messageJSON(_ m: Message) -> [String: Any] {
     [

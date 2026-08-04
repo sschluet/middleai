@@ -7,6 +7,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
   }
   public struct HostedAI: Codable, Equatable, Sendable {
     public var model = ""
+    public var contextTokenBudget = HostedContextWindow.defaultTokenBudget
   }
   public struct OpenWebUI: Codable, Equatable, Sendable {
     public var url = "http://127.0.0.1:3000"
@@ -27,6 +28,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var provider = "ollama"
     public var url = "http://127.0.0.1:11434"
     public var model = "qwen3:4b"
+    public var timeoutSeconds: TimeInterval = 4
+    public var circuitBreakerFailures = 3
+    public var circuitBreakerCooldownSeconds: TimeInterval = 30
   }
   public struct TTS: Codable, Equatable, Sendable {
     public var enabled = true
@@ -40,6 +44,11 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var localCommand = ""
     /// Core Audio device UID, or `system_default` to follow the macOS output selection.
     public var outputDeviceUID = "system_default"
+    /// User-maintained word-to-pronunciation replacements applied locally before synthesis.
+    public var pronunciationDictionary: [String: String] = [:]
+    /// Reuses locally rendered model audio without retaining spoken source text in filenames.
+    public var cacheEnabled = true
+    public var cacheMaximumMegabytes = 256
   }
   public struct STT: Codable, Equatable, Sendable {
     /// Parakeet TDT v3 is the multilingual model supported by MiddleAI.
@@ -54,6 +63,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var longFormMode = "accurate"
     /// Core Audio device UID, or `system_default` to follow the macOS input selection.
     public var inputDeviceUID = "system_default"
+    /// Hard RAM and interaction bound for one recording.
+    public var maximumRecordingSeconds = 120
+    /// Optional energy-based stop after speech followed by sustained silence.
+    public var automaticSilenceStop = false
   }
   public struct Dictation: Codable, Equatable, Sendable {
     public static let defaultFormattingApplications = [
@@ -87,7 +100,10 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var maximumConcurrentRequests = 2
   }
   public struct Logging: Codable, Equatable, Sendable {
+    /// Reserved for configuration compatibility. Runtime logging currently uses a fixed,
+    /// privacy-safe OSLog level rather than accepting dynamic verbosity.
     public var level = "INFO"
+    /// Reserved and deliberately ignored. MiddleAI never writes prompts or responses to logs.
     public var logPrompts = false
   }
   public struct Privacy: Codable, Equatable, Sendable {
@@ -96,6 +112,30 @@ public struct AppConfig: Codable, Equatable, Sendable {
   }
   public struct Profiles: Codable, Equatable, Sendable {
     public var systemPrompts: [String: String] = AppConfig.defaultProfileSystemPrompts
+    public var overrides: [String: ProfileOverrides] = [:]
+  }
+  public struct ProfileOverrides: Codable, Equatable, Sendable {
+    /// Uses the globally selected answer provider when nil.
+    public var assistantProvider: String?
+    /// Uses the provider's globally selected model when nil.
+    public var model: String?
+    /// Uses the globally selected TTS voice when nil.
+    public var ttsVoice: String?
+    /// `smart_summary`, `full`, or `first_paragraph`; nil inherits the global mode.
+    public var spokenResponseMode: String?
+    /// Approximate local conversation context budget. Nil uses the global default of 48,000.
+    public var contextBudgetCharacters: Int?
+
+    public init(
+      assistantProvider: String? = nil, model: String? = nil, ttsVoice: String? = nil,
+      spokenResponseMode: String? = nil, contextBudgetCharacters: Int? = nil
+    ) {
+      self.assistantProvider = assistantProvider
+      self.model = model
+      self.ttsVoice = ttsVoice
+      self.spokenResponseMode = spokenResponseMode
+      self.contextBudgetCharacters = contextBudgetCharacters
+    }
   }
 
   public static let supportedProfileIDs = [
@@ -137,6 +177,30 @@ public struct AppConfig: Codable, Equatable, Sendable {
     profiles.systemPrompts[profile] ?? ""
   }
 
+  public func profileOverrides(for profile: String) -> ProfileOverrides {
+    profiles.overrides[profile] ?? ProfileOverrides()
+  }
+
+  public func resolved(for profile: String? = nil) -> AppConfig {
+    let profile = profile ?? activeProfile
+    var resolved = self
+    resolved.activeProfile = profile
+    let overrides = profileOverrides(for: profile)
+    if let provider = overrides.assistantProvider, !provider.isEmpty {
+      resolved.assistant.provider = provider
+    }
+    if let model = overrides.model, !model.isEmpty { resolved.assistantModel = model }
+    if let voice = overrides.ttsVoice, !voice.isEmpty { resolved.tts.voice = voice }
+    if let mode = overrides.spokenResponseMode, !mode.isEmpty {
+      resolved.spokenResponseMode = mode
+    }
+    return resolved
+  }
+
+  public var activeContextBudgetCharacters: Int {
+    profileOverrides(for: activeProfile).contextBudgetCharacters ?? 48_000
+  }
+
   public static func defaultProfileSystemPrompt(for profile: String) -> String {
     defaultProfileSystemPrompts[profile] ?? ""
   }
@@ -172,6 +236,12 @@ public struct AppConfig: Codable, Equatable, Sendable {
     case "openrouter": return "openrouter://platform"
     default: return openwebui.url
     }
+  }
+}
+
+extension String {
+  fileprivate var middleAIIsLoopback: Bool {
+    ["localhost", "127.0.0.1", "::1"].contains(lowercased())
   }
 }
 
@@ -331,6 +401,12 @@ public enum ConfigLoader {
       case ("local_llm", "provider"): c.localLLM.provider = value
       case ("local_llm", "url"): c.localLLM.url = value
       case ("local_llm", "model"): c.localLLM.model = value
+      case ("local_llm", "timeout_seconds"):
+        c.localLLM.timeoutSeconds = try legacyDouble(value, line: index)
+      case ("local_llm", "circuit_breaker_failures"):
+        c.localLLM.circuitBreakerFailures = try legacyInt(value, line: index)
+      case ("local_llm", "circuit_breaker_cooldown_seconds"):
+        c.localLLM.circuitBreakerCooldownSeconds = try legacyDouble(value, line: index)
       case ("tts", "enabled"): c.tts.enabled = try legacyBool(value, line: index)
       case ("tts", "provider"): c.tts.provider = value
       case ("tts", "fallback_provider"): c.tts.fallbackProvider = value
@@ -342,14 +418,25 @@ public enum ConfigLoader {
         c.tts.temperature = Float(try legacyDouble(value, line: index))
       case ("tts", "local_command"): c.tts.localCommand = value
       case ("tts", "output_device_uid"): c.tts.outputDeviceUID = value
+      case ("tts", "cache_enabled"): c.tts.cacheEnabled = try legacyBool(value, line: index)
+      case ("tts", "cache_maximum_megabytes"):
+        c.tts.cacheMaximumMegabytes = try legacyInt(value, line: index)
       case ("openai", "model"): c.openai.model = value
+      case ("openai", "context_token_budget"):
+        c.openai.contextTokenBudget = try legacyInt(value, line: index)
       case ("openrouter", "model"): c.openrouter.model = value
+      case ("openrouter", "context_token_budget"):
+        c.openrouter.contextTokenBudget = try legacyInt(value, line: index)
       case ("stt", "model"): c.stt.model = value
       case ("stt", "language"): c.stt.language = value
       case ("stt", "encoder_precision"): c.stt.encoderPrecision = value
       case ("stt", "compute_mode"): c.stt.computeMode = value
       case ("stt", "long_form_mode"): c.stt.longFormMode = value
       case ("stt", "input_device_uid"): c.stt.inputDeviceUID = value
+      case ("stt", "maximum_recording_seconds"):
+        c.stt.maximumRecordingSeconds = try legacyInt(value, line: index)
+      case ("stt", "automatic_silence_stop"):
+        c.stt.automaticSilenceStop = try legacyBool(value, line: index)
       case ("dictation", "polish_with_local_ai"):
         c.dictation.polishWithLocalAI = try legacyBool(value, line: index)
       case ("dictation", "smart_formatting"):
@@ -392,13 +479,23 @@ public enum ConfigLoader {
   }
 
   private static func validate(_ c: AppConfig) throws {
-    guard ["openwebui", "openai", "openrouter"].contains(c.assistant.provider) else {
+    let assistantProviders = ["openwebui", "openai", "openrouter"]
+    guard assistantProviders.contains(c.assistant.provider) else {
       throw MiddleAIError.configuration("assistant.provider is invalid")
     }
     guard let webURL = URL(string: c.openwebui.url), ["http", "https"].contains(webURL.scheme),
       webURL.user == nil, webURL.password == nil
     else {
       throw MiddleAIError.configuration("openwebui.url must be an HTTP or HTTPS URL")
+    }
+    guard ["password", "api_key"].contains(c.openwebui.authMethod),
+      c.openwebui.username.count <= 320, c.openwebui.model.count <= 512,
+      c.openai.model.count <= 512, c.openrouter.model.count <= 512,
+      (512...1_000_000).contains(c.openai.contextTokenBudget),
+      (512...1_000_000).contains(c.openrouter.contextTokenBudget),
+      (c.openwebui.caFile?.count ?? 0) <= 4_096
+    else {
+      throw MiddleAIError.configuration("Answer provider settings are invalid")
     }
     guard c.api.bind == "127.0.0.1" || c.api.bind == "::1" else {
       throw MiddleAIError.configuration("api.bind must be loopback")
@@ -418,10 +515,6 @@ public enum ConfigLoader {
     guard c.tts.localOnly else {
       throw MiddleAIError.configuration("MiddleAI requires tts.local_only=true")
     }
-    guard c.hotkeys.dictation != c.hotkeys.assistant else {
-      throw MiddleAIError.configuration(
-        "Diktat und MiddleAI benötigen unterschiedliche Aktivierungstasten.")
-    }
     guard (0...1).contains(c.routing.confidenceAsk),
       (0...1).contains(c.routing.confidenceContinue),
       c.routing.continuationTimeoutSeconds.isFinite,
@@ -430,17 +523,53 @@ public enum ConfigLoader {
     else {
       throw MiddleAIError.configuration("Routing confidence thresholds are invalid")
     }
-    guard c.tts.rate.isFinite, c.tts.rate > 0, c.tts.temperature.isFinite,
-      !c.tts.outputDeviceUID.isEmpty, c.tts.outputDeviceUID.count <= 512
+    guard ["hybrid", "heuristic"].contains(c.routing.strategy) else {
+      throw MiddleAIError.configuration("routing.strategy is invalid")
+    }
+    guard ["apple", "ollama", "llama_cpp"].contains(c.localLLM.provider),
+      c.localLLM.model.count <= 512, (1...30).contains(c.localLLM.timeoutSeconds),
+      (1...10).contains(c.localLLM.circuitBreakerFailures),
+      (5...600).contains(c.localLLM.circuitBreakerCooldownSeconds)
+    else { throw MiddleAIError.configuration("Local LLM settings are invalid") }
+    if c.localLLM.enabled, c.localLLM.provider != "apple" {
+      guard let endpoint = URL(string: c.localLLM.url), endpoint.scheme == "http",
+        endpoint.host?.middleAIIsLoopback == true,
+        !c.localLLM.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else {
+        throw MiddleAIError.configuration(
+          "Local LLM must use a loopback HTTP endpoint and a model ID")
+      }
+    }
+    let ttsProviders = [
+      "adaptive", "macos", "supertonic3", "pockettts", "qwen3_tts", "voxtral_tts",
+      "local_model",
+    ]
+    guard ttsProviders.contains(c.tts.provider), c.tts.fallbackProvider == "macos",
+      ["high", "fast"].contains(c.tts.quality), c.tts.rate.isFinite,
+      (0.5...2).contains(c.tts.rate), c.tts.temperature.isFinite,
+      (0...2).contains(c.tts.temperature),
+      !c.tts.outputDeviceUID.isEmpty, c.tts.outputDeviceUID.count <= 512,
+      (0...2_048).contains(c.tts.cacheMaximumMegabytes),
+      c.tts.pronunciationDictionary.count <= 500,
+      c.tts.pronunciationDictionary.allSatisfy({ key, value in
+        !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          && key.count <= 120 && value.count <= 240
+      })
     else {
       throw MiddleAIError.configuration("TTS numeric settings are invalid")
+    }
+    if c.tts.provider == "local_model",
+      c.tts.localCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      throw MiddleAIError.configuration("tts.local_command is required for local_model")
     }
     guard c.stt.model == "parakeet_tdt_v3",
       ["de", "auto"].contains(c.stt.language),
       ["int8", "int4"].contains(c.stt.encoderPrecision),
       ["efficient", "fast"].contains(c.stt.computeMode),
       ["accurate", "fast"].contains(c.stt.longFormMode),
-      !c.stt.inputDeviceUID.isEmpty, c.stt.inputDeviceUID.count <= 512
+      !c.stt.inputDeviceUID.isEmpty, c.stt.inputDeviceUID.count <= 512,
+      (10...600).contains(c.stt.maximumRecordingSeconds)
     else {
       throw MiddleAIError.configuration("STT settings are invalid")
     }
@@ -450,10 +579,45 @@ public enum ConfigLoader {
     }
     guard AppConfig.supportedProfileIDs.contains(c.activeProfile),
       Set(c.profiles.systemPrompts.keys).isSubset(of: Set(AppConfig.supportedProfileIDs)),
-      c.profiles.systemPrompts.values.allSatisfy({ $0.count <= 20_000 })
+      Set(c.profiles.overrides.keys).isSubset(of: Set(AppConfig.supportedProfileIDs)),
+      c.profiles.systemPrompts.values.allSatisfy({ $0.count <= 20_000 }),
+      c.profiles.overrides.values.allSatisfy({ profile in
+        (profile.assistantProvider.map(assistantProviders.contains) ?? true)
+          && (profile.model?.count ?? 0) <= 512
+          && (profile.ttsVoice?.count ?? 0) <= 512
+          && (profile.spokenResponseMode.map {
+            ["smart_summary", "full", "first_paragraph"].contains($0)
+          } ?? true)
+          && (profile.contextBudgetCharacters.map { (4_000...200_000).contains($0) } ?? true)
+      })
     else {
       throw MiddleAIError.configuration("Profile configuration is invalid")
     }
+    let activationKeys = [
+      "left_option", "right_option", "left_control", "right_control", "left_command",
+      "right_command", "left_shift", "right_shift",
+    ]
+    guard activationKeys.contains(c.hotkeys.dictation),
+      activationKeys.contains(c.hotkeys.assistant),
+      c.hotkeys.dictation != c.hotkeys.assistant
+    else { throw MiddleAIError.configuration("Activation keys are invalid") }
+    guard ["smart_summary", "full", "first_paragraph"].contains(c.spokenResponseMode),
+      (500...10_000).contains(c.spokenResponseThreshold),
+      (20...500).contains(c.spokenResponseMaximumWords)
+    else { throw MiddleAIError.configuration("Spoken response settings are invalid") }
+    let formattingIDs = c.dictation.formattingApplications
+    let uniqueFormattingIDs = Set(formattingIDs.map { $0.lowercased() })
+    guard formattingIDs.count <= 100, uniqueFormattingIDs.count == formattingIDs.count,
+      formattingIDs.allSatisfy({ identifier in
+        identifier.count <= 255
+          && identifier.range(
+            of: #"^[A-Za-z0-9][A-Za-z0-9.-]+$"#, options: .regularExpression) != nil
+      })
+    else {
+      throw MiddleAIError.configuration("Dictation formatting application IDs are invalid")
+    }
+    guard ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"].contains(c.logging.level.uppercased())
+    else { throw MiddleAIError.configuration("logging.level is invalid") }
   }
 
   private static func secureExistingPath(_ url: URL, permissions: Int) throws {

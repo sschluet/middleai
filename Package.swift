@@ -12,21 +12,15 @@ let package = Package(
     .executable(name: "middleai-tests", targets: ["MiddleAITestRunner"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.5"),
-    .package(
-      url: "https://github.com/Blaizzy/mlx-audio-swift.git",
-      revision: "4266f988d170a83017d1e82e2e4654602f277f1d"
-    ),
+    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.5")
   ],
   targets: [
-    .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
+    .systemLibrary(name: "CSQLite"),
     .target(
       name: "MiddleAICore",
       dependencies: [
         "CSQLite",
         .product(name: "FluidAudio", package: "FluidAudio"),
-        .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
-        .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
       ],
       resources: [.process("Resources")],
       linkerSettings: [

@@ -88,6 +88,15 @@ import OSLog
     }
   }
 
+  func cancelCurrentInteraction() {
+    processingTask?.cancel()
+    processingTask = nil
+    assistantRequestActive = false
+    engineProvider()?.interrupt()
+    if activeMode != nil { cancel() } else { overlay.hide() }
+    onDismissed()
+  }
+
   private var activationKeys: (dictation: ActivationKeyChoice, assistant: ActivationKeyChoice) {
     let configured = configProvider().hotkeys
     return (
@@ -154,9 +163,28 @@ import OSLog
     dictationTarget = mode == .dictation ? insertion.captureTarget() : nil
     overlay.show(mode: mode, targetIcon: dictationTarget?.icon)
     do {
-      try recorder.start(deviceUID: configProvider().stt.inputDeviceUID) { [weak self] level in
-        Task { @MainActor in self?.overlay.setLevel(level) }
-      }
+      let stt = configProvider().stt
+      try recorder.start(
+        deviceUID: stt.inputDeviceUID,
+        maximumDuration: TimeInterval(stt.maximumRecordingSeconds),
+        automaticSilenceStop: stt.automaticSilenceStop,
+        onLevel: { [weak self] level in
+          Task { @MainActor in self?.overlay.setLevel(level) }
+        },
+        onAutomaticStop: { [weak self] reason in
+          Task { @MainActor in
+            guard let self, self.activeMode == mode else { return }
+            switch reason {
+            case .maximumDuration:
+              self.onStatus("Maximale Aufnahmezeit erreicht; Aufnahme wird verarbeitet")
+            case .silence:
+              self.onStatus("Sprechpause erkannt; Aufnahme wird verarbeitet")
+            case .audioDeviceChanged:
+              self.onStatus("Audiogerät wurde gewechselt; bisherige Aufnahme wird verarbeitet")
+            }
+            self.finishRecording(mode)
+          }
+        })
       onStatus(mode == .dictation ? "Diktat läuft" : "MiddleAI hört zu")
     } catch {
       activeMode = nil
@@ -262,12 +290,16 @@ import OSLog
       let inserted = try await insertion.insert(
         text, into: destination, smartFormatting: dictationConfig.smartFormatting,
         formattingApplicationIDs: dictationConfig.formattingApplications)
-      overlay.update(phase: .result, detail: inserted.plainText)
+      overlay.update(phase: .result, detail: inserted.formatted.plainText)
       overlay.hide(after: 1.4)
-      if inserted.didApplyFormatting, let appName = destination.applicationName {
+      if !inserted.verified {
+        onStatus("Einfügen wurde ausgelöst, konnte in dieser App aber nicht überprüft werden")
+      } else if inserted.formatted.didApplyFormatting, let appName = destination.applicationName {
         onStatus("Diktat für \(appName) formatiert und eingefügt")
       } else {
-        onStatus("Diktat eingefügt")
+        onStatus(
+          inserted.method == .accessibility
+            ? "Diktat direkt und überprüft eingefügt" : "Diktat überprüft eingefügt")
       }
     } catch {
       fail(error)

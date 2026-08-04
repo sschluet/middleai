@@ -1,4 +1,5 @@
 import Darwin
+import MiddleAICore
 import SwiftUI
 
 struct DiagnosticsPane: View {
@@ -6,6 +7,29 @@ struct DiagnosticsPane: View {
 
   var body: some View {
     VStack(spacing: 16) {
+      SettingsCard(
+        title: "Offline-Bereitschaft",
+        subtitle: "Was ohne Internet sofort nutzbar ist und was noch vorbereitet werden muss",
+        symbol: "wifi.slash"
+      ) {
+        ForEach(Array(state.offlineReadinessItems.enumerated()), id: \.offset) { index, item in
+          HStack(alignment: .top, spacing: 12) {
+            Image(systemName: readinessSymbol(item.state))
+              .foregroundStyle(readinessColor(item.state))
+              .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(item.title).font(.callout.weight(.medium))
+              Text(readinessTitle(item.state))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(readinessColor(item.state))
+              Text(item.detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+          }
+          if index < state.offlineReadinessItems.count - 1 { Divider() }
+        }
+      }
+
       SettingsCard(
         title: "Systemdiagnose",
         subtitle:
@@ -54,7 +78,7 @@ struct DiagnosticsPane: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(state.diagnosticsRunning)
-        Button("Redigierten Bericht exportieren") { state.exportDiagnostics() }
+        Button("Datenschutzsicheren Supportbericht exportieren") { state.exportDiagnostics() }
           .buttonStyle(.bordered)
           .disabled(state.diagnosticChecks.isEmpty)
         Spacer()
@@ -67,11 +91,42 @@ struct DiagnosticsPane: View {
       ) {
         Label("Keine Passwörter, Tokens oder Schlüsselbundinhalte", systemImage: "key.slash")
         Label("Keine Diktate, Prompts oder Anbieter-Antworten", systemImage: "text.badge.xmark")
-        Label("Serveradressen werden im Export ausgeblendet", systemImage: "network.slash")
+        Label(
+          "Keine Serveradressen, Dateipfade, Modell-IDs oder Benutzernamen",
+          systemImage: "network.slash")
+        Label(
+          "Fehlerdetails werden vollständig ausgelassen; nur freigegebene erfolgreiche Statuswerte erscheinen.",
+          systemImage: "checklist.unchecked")
       }
     }
     .task {
       if state.diagnosticChecks.isEmpty { state.runDiagnostics() }
+    }
+  }
+
+  private func readinessTitle(_ state: OfflineReadinessState) -> String {
+    switch state {
+    case .ready: return "Bereit"
+    case .needsDownload: return "Download oder Vorbereitung nötig"
+    case .needsService: return "Lokaler Dienst nötig"
+    case .requiresNetwork: return "Netzwerk erforderlich"
+    }
+  }
+
+  private func readinessSymbol(_ state: OfflineReadinessState) -> String {
+    switch state {
+    case .ready: return "checkmark.circle.fill"
+    case .needsDownload: return "arrow.down.circle.fill"
+    case .needsService: return "server.rack"
+    case .requiresNetwork: return "network"
+    }
+  }
+
+  private func readinessColor(_ state: OfflineReadinessState) -> Color {
+    switch state {
+    case .ready: return .green
+    case .needsDownload, .needsService: return .orange
+    case .requiresNetwork: return .secondary
     }
   }
 }

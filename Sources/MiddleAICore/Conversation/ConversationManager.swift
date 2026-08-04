@@ -66,6 +66,12 @@ public final class ConversationManager: @unchecked Sendable {
   public func add(_ message: Message, to conversationID: String) throws {
     try store.saveMessage(message, conversationID: conversationID)
   }
+  public func saveExchange(
+    user: Message, assistant: Message, conversation: Conversation
+  ) throws {
+    try store.saveExchange(user: user, assistant: assistant, conversation: conversation)
+    lock.managerLock { currentID = conversation.id }
+  }
   public func messages(for id: String) throws -> [Message] {
     try store.messages(conversationID: id, limit: 100)
   }

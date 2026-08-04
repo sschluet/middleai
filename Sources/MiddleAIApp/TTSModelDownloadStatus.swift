@@ -1,6 +1,6 @@
 import Foundation
 
-enum TTSModelDownloadPhase: Equatable {
+enum TTSModelDownloadPhase: Equatable, Sendable {
   case notDownloaded
   case downloading
   case installed
@@ -9,7 +9,7 @@ enum TTSModelDownloadPhase: Equatable {
   case failed
 }
 
-struct TTSModelDownloadStatus: Identifiable, Equatable {
+struct TTSModelDownloadStatus: Identifiable, Equatable, Sendable {
   let id: String
   let title: String
   let detail: String
@@ -43,7 +43,7 @@ struct TTSModelDownloadStatus: Identifiable, Equatable {
 /// Durable installation receipt written only after the provider has loaded the model.
 /// The model caches remain owned by Hugging Face or FluidAudio; this receipt records the
 /// exact snapshot and runtime that MiddleAI has actually verified.
-struct TTSModelInstallationManifest: Codable, Equatable {
+struct TTSModelInstallationManifest: Codable, Equatable, Sendable {
   static let schemaVersion = 1
 
   let schema: Int
@@ -57,6 +57,78 @@ struct TTSModelInstallationManifest: Codable, Equatable {
   let installedAt: Date
   let lastVerifiedAt: Date
   let functionalTestPassed: Bool
+}
+
+actor TTSModelStatusScanner {
+  private struct Request: Equatable {
+    let activeModelID: String?
+    let confirmed: Set<String>
+    let failures: [String: String]
+  }
+
+  private var cached: [TTSModelDownloadStatus]?
+  private var cachedRequest: Request?
+  private var cachedAt = Date.distantPast
+  private var inFlight:
+    (
+      id: UUID, generation: UInt64, request: Request,
+      task: Task<[TTSModelDownloadStatus], Never>
+    )?
+  private var generation: UInt64 = 0
+  private let minimumScanInterval: TimeInterval
+
+  init(minimumScanInterval: TimeInterval = 3) {
+    self.minimumScanInterval = minimumScanInterval
+  }
+
+  func statuses(
+    activeModelID: String?, confirmed: Set<String>, failures: [String: String], force: Bool = false
+  ) async -> [TTSModelDownloadStatus] {
+    let request = Request(
+      activeModelID: activeModelID, confirmed: confirmed, failures: failures)
+    if !force, let cached, cachedRequest == request,
+      Date().timeIntervalSince(cachedAt) < minimumScanInterval
+    {
+      return cached
+    }
+    if let running = inFlight {
+      let result = await running.task.value
+      if inFlight?.id == running.id { inFlight = nil }
+      if generation == running.generation {
+        cached = result
+        cachedRequest = running.request
+        cachedAt = Date()
+      }
+      if !force, generation == running.generation, running.request == request { return result }
+      return await statuses(
+        activeModelID: activeModelID, confirmed: confirmed, failures: failures, force: force)
+    }
+
+    let id = UUID()
+    let task = Task.detached(priority: .utility) {
+      TTSModelLibrary.scan(
+        activeModelID: activeModelID, confirmed: confirmed, failures: failures)
+    }
+    let scanGeneration = generation
+    inFlight = (id, scanGeneration, request, task)
+    let result = await task.value
+    if inFlight?.id == id { inFlight = nil }
+    if generation == scanGeneration {
+      cached = result
+      cachedRequest = request
+      cachedAt = Date()
+      return result
+    }
+    return await statuses(
+      activeModelID: activeModelID, confirmed: confirmed, failures: failures, force: force)
+  }
+
+  func invalidate() {
+    generation &+= 1
+    cached = nil
+    cachedRequest = nil
+    cachedAt = .distantPast
+  }
 }
 
 enum TTSModelLibrary {

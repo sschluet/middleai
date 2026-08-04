@@ -9,7 +9,7 @@ make run
 ./scripts/audit-repository.sh
 ```
 
-The package uses FluidAudio 0.15.5 for local Parakeet speech recognition and Core ML speech synthesis, plus MLX Audio for optional Qwen3-TTS inference. Qwen3-TTS and Voxtral can bootstrap a MiddleAI-managed Python/MLX runtime under `~/.middleai/runtime`. The app links Apple's `AVFoundation`, `ApplicationServices`, `Security` and `Network` frameworks plus system SQLite.
+The Swift package uses FluidAudio 0.15.5 for local Parakeet speech recognition and native Core ML speech synthesis. Qwen3-TTS and Voxtral do not add a native Swift MLX dependency; when selected, they bootstrap a pinned MiddleAI-managed Python/MLX runtime under `~/.middleai/runtime`. The app links Apple's `AVFoundation`, `ApplicationServices`, `Security` and `Network` frameworks plus system SQLite.
 
 Products:
 
@@ -35,6 +35,8 @@ Input adapters should transform their source into `{text, source}` and call `Mid
 ## Test policy
 
 Tests use an in-memory store where persistence is irrelevant, a temporary real SQLite database for migrations, and a `URLProtocol` mock server for HTTP. No live credentials or external network access are used.
+
+The portable suite also covers provider stream terminal states, background research polling, hosted retry limits, request FIFO/cancellation, bounded context, atomic exchanges, local spoken-summary grounding, incremental audio conversion, TTS initialization concurrency and private audio-cache validation.
 
 `make test` always runs the portable runner. CI additionally runs `swift test --enable-code-coverage` with the selected Xcode toolchain. Swift sources compile in Swift 6 language mode; new unchecked-sendable boundaries require a comment explaining their synchronization or third-party compatibility constraint.
 

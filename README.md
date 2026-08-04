@@ -30,7 +30,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 - Silent dismissal for accidental, too-short or empty Option-key recordings
 - Optional on-device dictation polishing with Apple Intelligence to remove filler words, repetitions and slips before insertion
 - Conservative spoken formatting commands for configurable target applications, including paragraphs, line breaks, German quotation marks, punctuation and rich lists
-- Focus-restoring, clipboard-preserving text insertion with app-tuned timing for plain and rich text
+- Accessibility-first text insertion for compatible plain-text fields, with a clipboard-preserving fallback for rich editors
 - Shared Swift core plus `middleai` CLI
 - Loopback-only synchronous `POST /input` plus queued `POST /command` for optional local integrations
 - SQLite conversation/message cache plus persistent, editable profile system prompts
@@ -107,7 +107,7 @@ After the initial downloads, speech recognition and speech synthesis work offlin
 
 | Component | Approximate installed size |
 | --- | ---: |
-| MiddleAI.app | 60 MB |
+| MiddleAI.app | 15 MB |
 | Parakeet TDT v3 STT including Core ML data | 1 GB |
 | Supertonic 3 | 0.2–0.4 GB |
 | Qwen3-TTS 4-bit plus managed runtime | 2.8 GB |
@@ -127,7 +127,9 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 7. Tap left Option, speak and tap it again to insert dictation into the active field. Holding and releasing also works.
 8. Use right Option the same way to ask the configured provider. MiddleAI displays and speaks the response.
 
-OpenAI and OpenRouter credentials are API keys, not consumer subscription logins. MiddleAI stores them under provider-specific Keychain accounts and never writes them to `~/.middleai/config.yaml`. OpenRouter uses its authenticated user-model endpoint when available so the picker reflects account privacy and routing preferences; it falls back to the public model catalog if that endpoint is unavailable.
+For OpenWebUI, select either username/password or API-key authentication explicitly. The username field is used only for password login; both secret types are stored in a Keychain scope derived from the server and active profile. This lets an entered replacement secret be tested without exposing or overwriting another server's credential.
+
+OpenAI and OpenRouter credentials are API keys, not consumer subscription logins. MiddleAI stores them under provider-specific Keychain accounts and never writes them to `~/.middleai/config.yaml`. OpenRouter uses its authenticated user-model endpoint when available so the picker reflects account privacy and routing preferences; it falls back to the public model catalog if that endpoint is unavailable. Their configurable context-token budget limits the earlier conversation history MiddleAI sends; it is not an output limit, and larger requests can increase provider API charges.
 
 Settings → Devices owns audio routing. Choosing **macOS default** follows subsequent system changes automatically. Choosing a concrete microphone keeps recording on that Core Audio device. Choosing a concrete speaker routes MiddleAI-generated audio through that device without changing the global macOS default; if the device disappears, playback falls back to the system output.
 
@@ -149,7 +151,7 @@ MiddleAI can translate explicit German structure commands into formatted output.
 - Starting with `nummerierte Liste` creates an ordered list.
 - Spoken `Komma`, `Doppelpunkt`, `Semikolon`, `Fragezeichen`, `Ausrufezeichen` and `Satzende` are converted conservatively.
 
-MiddleAI restores the application that was active when recording started, waits until it is focused, then pastes the transcript with app-specific timing. Rich output places plain text, HTML and RTF representations on the pasteboard so Word, PowerPoint, Outlook and Proton Mail can preserve lists and paragraphs. The previous clipboard contents are restored only after the paste has completed. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
+MiddleAI captures the focused text field when recording starts and restores the target application before insertion. For compatible plain-text fields it writes through the macOS Accessibility API and verifies the resulting value. Rich editors and fields that do not expose a writable value use a clipboard-preserving paste fallback with one bounded verification retry when the target can be read safely. MiddleAI reports an unverified insertion as such instead of claiming success or pasting twice. Rich output places plain text, HTML and RTF representations on the pasteboard so Word, PowerPoint, Outlook and Proton Mail can preserve lists and paragraphs. The previous clipboard contents are restored only after the paste has completed. Detection is deliberately conservative: ordinary wording such as `Die neue Zeile ist rot` is not interpreted as a command, and all other applications continue to receive plain text only.
 
 The password is written to Keychain service `de.middleai.openwebui`, never to YAML. For development only, `MIDDLEAI_OPENWEBUI_PASSWORD` may be set from a gitignored `.env`-style shell environment.
 
@@ -195,11 +197,13 @@ Within the configured continuation window, a new voice request continues the act
 
 The assistant overlay remains visible while the provider streams and until the local spoken response has actually finished. Pressing the configured assistant activation key again during generation or speech cancels the remote request, the local TTS queue and the overlay together.
 
-The local router only returns a routing decision; it is never asked to answer the user. Confidence thresholds and continuation timeout are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI enforces `0700` on its data directory and `0600` on the configuration file.
+The local router only returns a routing decision; it is never asked to answer the user. Every model decision is validated against the current conversation IDs and confidence range before it can be applied. Local Ollama and llama.cpp requests have a short timeout and a circuit breaker, so an unavailable service cannot repeatedly delay dictation or assistant requests. Confidence thresholds, timeout and circuit-breaker limits are configurable in `~/.middleai/config.yaml`. The file contains schema-versioned JSON, which is valid YAML 1.2 and safely preserves quotes, hashes and arrays. Existing legacy files are migrated once with a `.legacy-backup` copy. MiddleAI validates the complete configuration, enforces `0700` on its data directory and `0600` on the configuration file.
+
+The legacy `logging.level` and `logging.logPrompts` keys remain readable for configuration compatibility. Runtime logging intentionally uses a fixed privacy-safe event allow-list, and prompt/response logging stays disabled regardless of those reserved values.
 
 ## Profiles
 
-The Standard, Management, Architecture, Coding and Research profiles can each carry an editable system prompt. Profiles are configured in Settings, saved in `~/.middleai/config.yaml` and injected as the first system message for requests to the selected answer provider. The active profile can be changed from Settings, the menu-bar menu or a local spoken command. Profile prompts affect assistant answers only; STT, dictation polishing and TTS remain local and unchanged.
+The Standard, Management, Architecture, Coding and Research profiles can each carry an editable system prompt and optional overrides for answer provider, model, TTS voice, spoken-response mode and local context budget. Empty overrides inherit the global setting. Profiles are configured in Settings and saved in `~/.middleai/config.yaml`; switching a profile rebuilds the provider connection deliberately so all overrides become active together. STT and dictation polishing remain local and unchanged.
 
 ## TTS and privacy
 
@@ -209,9 +213,9 @@ The Standard, Management, Architecture, Coding and Research profiles can each ca
 
 `macos` remains a completely local fallback. MiddleAI lists the installed German Apple voices with gender and quality information. Additional Apple voices can be opened for download from the Speech settings. `local_model` remains available for an optional custom executable. New user input interrupts playback and clears pending speech immediately.
 
-In `smart_summary` mode MiddleAI waits for the complete provider response and then asks Apple Intelligence for a short grounded German spoken summary. The prompt contains the actual response text and preserves conclusions, important figures, risks and next steps. If Apple Intelligence is unavailable or rejects the request, a deterministic local fallback ranks relevant conclusion and recommendation sentences across the response instead of reading only its opening paragraph.
+In `smart_summary` mode MiddleAI waits for the complete provider response and then asks Apple Intelligence for a short grounded German spoken summary. If Apple Intelligence is unavailable, the configured loopback Ollama or llama.cpp model is tried with bounded input, a short timeout and the same circuit-breaker behavior as routing. Candidate summaries must end on a sentence boundary, stay within the word budget, contain no invented figures and remain lexically grounded in the answer. If either model is unavailable or fails validation, a deterministic local fallback ranks relevant conclusion and recommendation sentences across the response instead of reading only its opening paragraph.
 
-STT microphone audio remains in memory and is never sent to an answer provider. Only the finished assistant-mode transcript and required local conversation context are sent to the configured provider. Dictation-mode transcripts never leave the Mac.
+STT microphone audio remains in memory and is never sent to an answer provider. Only the finished assistant-mode transcript and the context required within the selected profile budget are sent to the configured provider. Dictation-mode transcripts never leave the Mac. A private session can be enabled at runtime to keep MiddleAI's routing conversations entirely in memory; disabling it discards that memory. This does not prevent a configured remote provider from retaining requests according to its own policy.
 
 ## Tests and diagnostics
 
@@ -222,7 +226,7 @@ dist/bin/middleai doctor
 
 The portable test runner covers configuration migration and permissions, HTTP parsing and security, SQLite, command detection, formatting, routing, TTS queue/barge-in, OpenWebUI streaming, fallback and cancellation. An additional XCTest target provides structured IDE/CI reporting and coverage when a full Xcode toolchain is available. Standalone Command Line Tools can continue to use `make test` because that environment does not ship an importable XCTest module.
 
-Settings → Diagnose checks permissions, configuration rights, disk space, local API protection, the selected OpenWebUI model and connection. Its support report deliberately omits credentials, prompts and responses and redacts server URLs. Settings → Hilfe can inspect and delete the local routing cache without deleting canonical conversations in OpenWebUI. The cache defaults to a 90-day retention period; 30 days, one year or permanent local retention can be selected there.
+Settings → Diagnose checks permissions, configuration rights, disk space, local API protection, the selected OpenWebUI model and connection. The offline overview distinguishes ready components, missing local downloads, services that must be started and providers that require a network connection. Its privacy-safe support report uses an explicit allow-list and omits credentials, URLs, paths, model IDs, prompts, responses and failed diagnostic details. Settings → Hilfe can start a private in-memory session, inspect and delete the local routing cache without deleting canonical conversations in OpenWebUI. The cache defaults to a 90-day retention period; 30 days, one year or permanent local retention can be selected there.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md) and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation and maintenance details.
 

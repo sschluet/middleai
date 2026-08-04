@@ -63,10 +63,13 @@ struct SettingsView: View {
   @State private var audioInputDevices = AudioInputDeviceCatalog.availableDevices()
   @State private var audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
   @State private var editingProfile = "default"
+  @State private var pronunciationDraft: String
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
     _selected = State(initialValue: initialPane)
+    _pronunciationDraft = State(
+      initialValue: Self.serializePronunciations(state.config.tts.pronunciationDictionary))
   }
 
   var body: some View {
@@ -215,11 +218,18 @@ struct SettingsView: View {
         if state.config.assistant.provider == "openwebui" {
           SettingsField(
             title: "Server", prompt: "https://chat.example.com", text: $state.config.openwebui.url)
-          SettingsField(
-            title: "Benutzer", prompt: "name@firma.de", text: $state.config.openwebui.username)
+          Picker("Anmeldung", selection: $state.config.openwebui.authMethod) {
+            Text("Benutzername und Passwort").tag("password")
+            Text("API-Schlüssel").tag("api_key")
+          }
+          .pickerStyle(.menu)
+          if state.config.openwebui.authMethod == "password" {
+            SettingsField(
+              title: "Benutzer", prompt: "name@firma.de", text: $state.config.openwebui.username)
+          }
         }
         HStack(alignment: .firstTextBaseline, spacing: 18) {
-          Text(state.config.assistant.provider == "openwebui" ? "Passwort" : "API-Schlüssel")
+          Text(providerSecretTitle)
             .frame(width: 112, alignment: .leading).foregroundStyle(.secondary)
           SecureField("Unverändert lassen oder neu eingeben", text: $password)
             .textFieldStyle(.roundedBorder)
@@ -255,6 +265,16 @@ struct SettingsView: View {
               get: { state.config.openwebui.caFile ?? "" },
               set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
         } else {
+          HStack {
+            Stepper(
+              "Verlaufsbudget: \(hostedContextBudgetBinding.wrappedValue.formatted()) Token",
+              value: hostedContextBudgetBinding, in: 512...1_000_000, step: 4_096)
+            Spacer()
+          }
+          Text(
+            "Das ist das lokale Maximalbudget für den früheren Gesprächsverlauf, den MiddleAI mitsendet. Es ist kein Ausgabelimit. Ein größeres Budget kann die API-Kosten und die Abrechnung beim Anbieter erhöhen."
+          )
+          .font(.caption2).foregroundStyle(.secondary)
           Label(
             "Anfragen und Gesprächskontext werden an \(state.config.assistantProviderTitle) übertragen. STT, Diktat und TTS bleiben lokal.",
             systemImage: "info.circle"
@@ -356,6 +376,47 @@ struct SettingsView: View {
           .buttonStyle(.bordered)
         }
         Divider()
+        Text("Optionale Profilabweichungen")
+          .font(.callout.weight(.semibold))
+        Text(
+          "Leere Felder übernehmen die globalen Einstellungen. Anbieter- und Modellwechsel werden beim Aktivieren des Profils wirksam. Zugangsdaten bleiben im Schlüsselbund."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Picker("Antwortanbieter", selection: profileProviderBinding) {
+          Text("Globale Auswahl übernehmen").tag("")
+          Text("OpenWebUI").tag("openwebui")
+          Text("OpenAI Platform").tag("openai")
+          Text("OpenRouter").tag("openrouter")
+        }
+        .pickerStyle(.menu)
+        SettingsField(
+          title: "Modell-ID", prompt: "Leer übernimmt das globale Modell",
+          text: profileModelBinding)
+        SettingsField(
+          title: "TTS-Stimme", prompt: "Leer übernimmt die globale Stimmen-ID",
+          text: profileVoiceBinding)
+        Picker("Vorlesen", selection: profileSpokenModeBinding) {
+          Text("Globale Auswahl übernehmen").tag("")
+          Text("Lange Antworten lokal zusammenfassen").tag("smart_summary")
+          Text("Vollständig vorlesen").tag("full")
+          Text("Nur ersten Abschnitt vorlesen").tag("first_paragraph")
+        }
+        .pickerStyle(.menu)
+        HStack {
+          Stepper(
+            "Kontextbudget: \(profileContextBudgetBinding.wrappedValue.formatted()) Zeichen",
+            value: profileContextBudgetBinding, in: 4_000...200_000, step: 4_000)
+          Spacer()
+          Button("Globalen Standard verwenden") {
+            updateProfileOverrides { $0.contextBudgetCharacters = nil }
+          }
+          .buttonStyle(.bordered)
+        }
+        Text(
+          "Das Kontextbudget begrenzt nur die lokale Kopie vorheriger Nachrichten, die MiddleAI an den Anbieter sendet. 48.000 Zeichen sind der Standard."
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+        Divider()
         HStack {
           Button("Profile speichern") { state.saveProfileSettings() }
             .buttonStyle(.borderedProminent)
@@ -444,6 +505,12 @@ struct SettingsView: View {
           Button("Mikrofonfreigabe öffnen") { openMicrophonePrivacySettings() }
           Button("Bedienungshilfen öffnen") { openPrivacySettings() }
         }.buttonStyle(.bordered)
+      }
+    }
+    .task {
+      while !Task.isCancelled {
+        refreshAudioDevices()
+        try? await Task.sleep(for: .seconds(2))
       }
     }
   }
@@ -553,6 +620,48 @@ struct SettingsView: View {
             "Apple Intelligence erstellt die Kurzfassung vollständig lokal. Wenn das Modell nicht bereit ist, verwendet MiddleAI eine lokale extraktive Kurzfassung."
           )
           .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+
+      SettingsCard(
+        title: "Aussprache und Zwischenspeicher",
+        subtitle: "Wiederkehrende Begriffe lokal anpassen und schneller abspielen",
+        symbol: "text.bubble"
+      ) {
+        Text("Aussprachewörterbuch")
+          .font(.callout.weight(.semibold))
+        TextEditor(text: $pronunciationDraft)
+          .font(.system(.body, design: .monospaced))
+          .frame(minHeight: 90)
+          .overlay(
+            RoundedRectangle(cornerRadius: 7).stroke(Color.secondary.opacity(0.25)))
+        Text(
+          "Eine Zuordnung pro Zeile, zum Beispiel: OpenWebUI = Open Web U I. Sie wirkt nur auf die Sprachausgabe; der angezeigte Antworttext bleibt unverändert."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        Divider()
+        Toggle(
+          "Erzeugte Sprachausgabe lokal zwischenspeichern", isOn: $state.config.tts.cacheEnabled)
+        if state.config.tts.cacheEnabled {
+          Stepper(
+            "Höchstens \(state.config.tts.cacheMaximumMegabytes) MB verwenden",
+            value: $state.config.tts.cacheMaximumMegabytes, in: 64...2_048, step: 64)
+          Text(
+            "Der Cache enthält Audio aus vorgelesenen Antworten und liegt ausschließlich lokal mit eingeschränkten Dateirechten. Ältere Einträge werden automatisch entfernt."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+        HStack {
+          Button("Wörterbuch übernehmen") {
+            state.config.tts.pronunciationDictionary = Self.parsePronunciations(
+              pronunciationDraft)
+            pronunciationDraft = Self.serializePronunciations(
+              state.config.tts.pronunciationDictionary)
+            state.applySpeechSettings()
+          }
+          .buttonStyle(.bordered)
+          Button("TTS-Cache leeren") { state.clearTTSAudioCache() }
+            .buttonStyle(.borderless)
         }
       }
 
@@ -671,6 +780,16 @@ struct SettingsView: View {
           "Diese Einstellung greift erst bei längeren Aufnahmen. „Genauer“ prüft am Anfang mehrere Segmentierungswege und reduziert ausgelassene oder doppelte Wörter an Übergängen. „Schneller“ verwendet nur einen Weg und benötigt weniger Rechenzeit."
         )
         .font(.caption).foregroundStyle(.secondary)
+        Stepper(
+          "Aufnahme nach spätestens \(state.config.stt.maximumRecordingSeconds) Sekunden beenden",
+          value: $state.config.stt.maximumRecordingSeconds, in: 30...600, step: 30)
+        Toggle(
+          "Nach längerer Sprechpause automatisch beenden",
+          isOn: $state.config.stt.automaticSilenceStop)
+        Text(
+          "Die Zeitbegrenzung schützt den Arbeitsspeicher bei versehentlich laufender Aufnahme. Der optionale lokale Stille-Stopp greift erst, nachdem Sprache erkannt wurde."
+        )
+        .font(.caption).foregroundStyle(.secondary)
         Label(
           "Änderungen gelten nach „STT-Einstellungen anwenden“ für die nächste Aufnahme. Ein Wechsel der Encoder-Stufe kann beim ersten Mal einen Modelldownload auslösen.",
           systemImage: "info.circle"
@@ -777,7 +896,7 @@ struct SettingsView: View {
     VStack(spacing: 16) {
       SettingsCard(
         title: "Was macht dieser Bereich?",
-        subtitle: "MiddleAI entscheidet hier nur, welche Unterhaltung weitergeführt wird",
+        subtitle: "Lokale Hilfe für Chat-Zuordnung und kurze gesprochene Zusammenfassungen",
         symbol: "questionmark.circle"
       ) {
         VStack(alignment: .leading, spacing: 12) {
@@ -792,7 +911,7 @@ struct SettingsView: View {
           IntelligenceStep(
             number: "3", title: "Der gewählte Anbieter erstellt die Antwort",
             detail:
-              "Das hier eingestellte Routing-Modell beantwortet niemals deine Frage und ersetzt den Antwortanbieter nicht."
+              "Das lokale Modell beantwortet deine Frage nicht. Bei langen Antworten kann es zusätzlich eine kurze, geprüfte Vorlesefassung erstellen."
           )
         }
         Divider()
@@ -870,10 +989,28 @@ struct SettingsView: View {
             text: $state.config.localLLM.model)
           Text(localServerHelp)
             .font(.caption).foregroundStyle(.secondary)
+          DisclosureGroup("Zeitlimits und automatischer Rückfall") {
+            VStack(alignment: .leading, spacing: 10) {
+              Stepper(
+                "Zeitlimit: \(state.config.localLLM.timeoutSeconds.formatted()) Sekunden",
+                value: $state.config.localLLM.timeoutSeconds, in: 1...30, step: 1)
+              Stepper(
+                "Pause nach \(state.config.localLLM.circuitBreakerFailures) Fehlern",
+                value: $state.config.localLLM.circuitBreakerFailures, in: 1...10)
+              Stepper(
+                "Pause: \(state.config.localLLM.circuitBreakerCooldownSeconds.formatted()) Sekunden",
+                value: $state.config.localLLM.circuitBreakerCooldownSeconds, in: 5...600, step: 5)
+              Text(
+                "Nach wiederholten Fehlern setzt MiddleAI den lokalen Dienst vorübergehend aus. Chat-Routing und Vorlesefassung fallen dann ohne Blockieren auf die eingebauten lokalen Verfahren zurück."
+              )
+              .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.top, 8)
+          }
         }
         Divider()
         Label(
-          "Diese Auswahl betrifft nur mehrdeutige Chat-Zuordnungen. Antworten erzeugt weiterhin \(state.config.assistantProviderTitle). Diktatglättung stellst du unter „Spracheingabe“ ein; Kurzfassungen unter „Sprachausgabe“.",
+          "Antworten erzeugt weiterhin \(state.config.assistantProviderTitle). Das lokale Modell erhält nur bei mehrdeutiger Chat-Zuordnung oder für eine lange Vorlesefassung begrenzten Text. Diktatglättung stellst du unter „Spracheingabe“ ein.",
           systemImage: "lock.shield"
         )
         .font(.caption).foregroundStyle(.secondary)
@@ -1067,6 +1204,16 @@ struct SettingsView: View {
           "Diktate für aktive Textfelder werden niemals an den Antwortanbieter gesendet.",
           systemImage: "text.cursor")
         Divider()
+        Toggle(
+          "Private Sitzung",
+          isOn: Binding(
+            get: { state.isPrivateSession },
+            set: { state.setPrivateSession($0) }))
+        Text(
+          "In einer privaten Sitzung speichert MiddleAI Unterhaltungen und Routing-Kontext nur im Arbeitsspeicher. Beim Beenden wird dieser temporäre Verlauf verworfen und nicht in SQLite geschrieben. Anfragen an einen entfernten Antwortanbieter können dort weiterhin nach dessen Richtlinien gespeichert werden. Die Einstellung gilt nur für die laufende App-Sitzung."
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+        Divider()
         HStack {
           Text("Automatisch aufbewahren")
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1162,6 +1309,26 @@ struct SettingsView: View {
     Binding(get: { state.config.assistantModel }, set: { state.config.assistantModel = $0 })
   }
 
+  private var hostedContextBudgetBinding: Binding<Int> {
+    Binding(
+      get: {
+        state.config.assistant.provider == "openai"
+          ? state.config.openai.contextTokenBudget : state.config.openrouter.contextTokenBudget
+      },
+      set: { value in
+        if state.config.assistant.provider == "openai" {
+          state.config.openai.contextTokenBudget = value
+        } else {
+          state.config.openrouter.contextTokenBudget = value
+        }
+      })
+  }
+
+  private var providerSecretTitle: String {
+    guard state.config.assistant.provider == "openwebui" else { return "API-Schlüssel" }
+    return state.config.openwebui.authMethod == "api_key" ? "API-Schlüssel" : "Passwort"
+  }
+
   private var answerProviderDescription: String {
     switch state.config.assistant.provider {
     case "openai":
@@ -1182,6 +1349,59 @@ struct SettingsView: View {
       set: { value in
         state.config.profiles.systemPrompts[editingProfile] = String(value.prefix(20_000))
       })
+  }
+
+  private var profileProviderBinding: Binding<String> {
+    Binding(
+      get: { state.config.profileOverrides(for: editingProfile).assistantProvider ?? "" },
+      set: { value in updateProfileOverrides { $0.assistantProvider = value.isEmpty ? nil : value }
+      })
+  }
+
+  private var profileModelBinding: Binding<String> {
+    Binding(
+      get: { state.config.profileOverrides(for: editingProfile).model ?? "" },
+      set: { value in
+        updateProfileOverrides {
+          let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+          $0.model = trimmed.isEmpty ? nil : value
+        }
+      })
+  }
+
+  private var profileVoiceBinding: Binding<String> {
+    Binding(
+      get: { state.config.profileOverrides(for: editingProfile).ttsVoice ?? "" },
+      set: { value in
+        updateProfileOverrides {
+          let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+          $0.ttsVoice = trimmed.isEmpty ? nil : value
+        }
+      })
+  }
+
+  private var profileSpokenModeBinding: Binding<String> {
+    Binding(
+      get: { state.config.profileOverrides(for: editingProfile).spokenResponseMode ?? "" },
+      set: { value in
+        updateProfileOverrides { $0.spokenResponseMode = value.isEmpty ? nil : value }
+      })
+  }
+
+  private var profileContextBudgetBinding: Binding<Int> {
+    Binding(
+      get: {
+        state.config.profileOverrides(for: editingProfile).contextBudgetCharacters ?? 48_000
+      },
+      set: { value in updateProfileOverrides { $0.contextBudgetCharacters = value } })
+  }
+
+  private func updateProfileOverrides(
+    _ update: (inout AppConfig.ProfileOverrides) -> Void
+  ) {
+    var overrides = state.config.profileOverrides(for: editingProfile)
+    update(&overrides)
+    state.config.profiles.overrides[editingProfile] = overrides
   }
 
   private func profileTitle(_ profile: String) -> String {
@@ -1235,6 +1455,24 @@ struct SettingsView: View {
     audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
   }
 
+  private static func serializePronunciations(_ pronunciations: [String: String]) -> String {
+    pronunciations.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+      .map { "\($0.key) = \($0.value)" }
+      .joined(separator: "\n")
+  }
+
+  private static func parsePronunciations(_ text: String) -> [String: String] {
+    var result: [String: String] = [:]
+    for line in text.split(whereSeparator: \.isNewline).prefix(500) {
+      let parts = line.split(separator: "=", maxSplits: 1).map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+      }
+      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { continue }
+      result[String(parts[0].prefix(120))] = String(parts[1].prefix(240))
+    }
+    return result
+  }
+
   private var selectedMicrophoneStatus: String {
     if state.config.stt.inputDeviceUID == AudioInputDeviceCatalog.systemDefaultUID {
       return "Aktiv: \(systemDefaultMicrophoneLabel)"
@@ -1252,10 +1490,10 @@ struct SettingsView: View {
         "Apple Intelligence läuft über das macOS-Systemmodell, benötigt keinen separaten Download in MiddleAI und bekommt nur dann Kontext, wenn Hybridregeln bei der Chat-Auswahl uneinig sind. Nicht verfügbar auf diesem Mac? Dann bleiben die eingebauten Regeln aktiv."
     case "ollama":
       return
-        "Ollama stellt ein selbst gewähltes lokales Modell bereit. MiddleAI verwendet dessen lokale /v1-API ausschließlich als Entscheidungshilfe für mehrdeutige Chat-Zuordnungen."
+        "Ollama stellt ein selbst gewähltes lokales Modell bereit. MiddleAI verwendet dessen lokale /v1-API als Entscheidungshilfe für mehrdeutige Chat-Zuordnungen und als Rückfall für lange gesprochene Zusammenfassungen."
     case "llama_cpp":
       return
-        "llama.cpp wird über die lokalen Endpunkte /v1/models und /v1/chat/completions angesprochen. Für deinen Mac ist http://127.0.0.1:18881 voreingestellt. MiddleAI startet oder lädt den Server selbst nicht."
+        "llama.cpp wird für Chat-Zuordnung und lange Vorlesefassungen über /v1/models und /v1/chat/completions angesprochen. Für deinen Mac ist http://127.0.0.1:18881 voreingestellt. MiddleAI startet oder lädt den Server selbst nicht."
     default:
       return
         "MiddleAI nutzt nur Zeitabstand, Begriffe und lokale Ähnlichkeit. Das braucht weder Apple Intelligence noch einen Modellserver und ist der robusteste Rückfallmodus."

@@ -11,7 +11,26 @@ public actor SpokenResponseSummarizer {
     let score: Double
   }
 
-  public init() {}
+  private let localLLM: AppConfig.LocalLLM?
+  private let session: URLSession
+  private let localCircuitBreaker: LocalLLMCircuitBreaker?
+  private let systemModelEnabled: Bool
+
+  public init(
+    localLLM: AppConfig.LocalLLM? = nil, session: URLSession = .shared,
+    systemModelEnabled: Bool = true
+  ) {
+    self.localLLM = localLLM
+    self.session = session
+    self.systemModelEnabled = systemModelEnabled
+    if let localLLM, localLLM.enabled, ["ollama", "llama_cpp"].contains(localLLM.provider) {
+      self.localCircuitBreaker = LocalLLMCircuitBreaker(
+        failureThreshold: localLLM.circuitBreakerFailures,
+        cooldown: localLLM.circuitBreakerCooldownSeconds)
+    } else {
+      self.localCircuitBreaker = nil
+    }
+  }
 
   public func spokenText(
     for response: String, threshold: Int = 850, maximumWords: Int = 110
@@ -22,7 +41,7 @@ public actor SpokenResponseSummarizer {
     else { return clean }
 
     #if canImport(FoundationModels)
-      if #available(macOS 26.0, *) {
+      if systemModelEnabled, #available(macOS 26.0, *) {
         let model = SystemLanguageModel(
           useCase: .general, guardrails: .permissiveContentTransformations)
         if model.availability == .available,
@@ -44,11 +63,7 @@ public actor SpokenResponseSummarizer {
                 </antwort>
                 """)
             let candidate = Self.plainText(result.content)
-            if !candidate.isEmpty,
-              candidate.count < clean.count,
-              candidate.split(whereSeparator: \Character.isWhitespace).count <= maximumWords + 20,
-              Self.endsAtSentenceBoundary(candidate)
-            {
+            if Self.isGroundedSummary(candidate, in: clean, maximumWords: maximumWords) {
               return candidate
             }
           } catch {
@@ -58,7 +73,60 @@ public actor SpokenResponseSummarizer {
       }
     #endif
 
+    if let localSummary = await summarizeWithLocalLLM(clean, maximumWords: maximumWords) {
+      return localSummary
+    }
+
     return Self.extractiveSummary(clean, maximumWords: maximumWords)
+  }
+
+  private func summarizeWithLocalLLM(_ clean: String, maximumWords: Int) async -> String? {
+    guard let localLLM, let localCircuitBreaker,
+      localLLM.enabled, ["ollama", "llama_cpp"].contains(localLLM.provider),
+      let endpoint = URL(string: localLLM.url), endpoint.scheme == "http",
+      ["localhost", "127.0.0.1", "::1"].contains(endpoint.host?.lowercased() ?? ""),
+      await localCircuitBreaker.allowsRequest()
+    else { return nil }
+
+    do {
+      let source = Self.boundedSummaryInput(clean)
+      let payload: [String: Any] = [
+        "model": localLLM.model,
+        "stream": false,
+        "temperature": 0,
+        "messages": [
+          [
+            "role": "system",
+            "content":
+              "Fasse ausschließlich den gegebenen Text auf Deutsch zusammen. Bewahre wichtige Zahlen, Bedingungen, Risiken und nächste Schritte. Keine Einleitung, kein Markdown, keine erfundenen Fakten. Maximal \(maximumWords) Wörter und nur vollständige Sätze.",
+          ],
+          ["role": "user", "content": source],
+        ],
+      ]
+      var request = URLRequest(url: LocalLLMEndpoint.completionsURL(from: endpoint))
+      request.httpMethod = "POST"
+      request.timeoutInterval = localLLM.timeoutSeconds
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+      let (data, response) = try await session.data(for: request)
+      guard (response as? HTTPURLResponse)?.statusCode == 200,
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let choices = root["choices"] as? [[String: Any]],
+        let message = choices.first?["message"] as? [String: Any],
+        let content = message["content"] as? String
+      else { throw MiddleAIError.invalidResponse("Local summary response was invalid") }
+      let candidate = Self.plainText(content)
+      guard Self.isGroundedSummary(candidate, in: clean, maximumWords: maximumWords) else {
+        throw MiddleAIError.invalidResponse("Local summary was not grounded")
+      }
+      await localCircuitBreaker.recordSuccess()
+      return candidate
+    } catch is CancellationError {
+      return nil
+    } catch {
+      await localCircuitBreaker.recordFailure()
+      return nil
+    }
   }
 
   public nonisolated static func plainText(_ input: String) -> String {
@@ -132,6 +200,32 @@ public actor SpokenResponseSummarizer {
     }
     let bounded = words.prefix(max(20, maximumWords)).joined(separator: " ")
     return bounded + ". Die vollständige Antwort ist in MiddleAI sichtbar."
+  }
+
+  public nonisolated static func isGroundedSummary(
+    _ candidate: String, in source: String, maximumWords: Int
+  ) -> Bool {
+    let words = candidate.split(whereSeparator: \Character.isWhitespace)
+    guard !candidate.isEmpty, candidate.count < source.count,
+      words.count <= maximumWords + 10, endsAtSentenceBoundary(candidate)
+    else { return false }
+    let candidateNumbers = numberTokens(candidate)
+    let sourceNumbers = Set(numberTokens(source))
+    guard candidateNumbers.allSatisfy(sourceNumbers.contains) else { return false }
+    let candidateTokens = TextSimilarity.tokens(candidate)
+    guard !candidateTokens.isEmpty else { return false }
+    let sourceTokens = Set(TextSimilarity.tokens(source))
+    let grounded = candidateTokens.filter(sourceTokens.contains).count
+    return Double(grounded) / Double(candidateTokens.count) >= 0.55
+  }
+
+  private nonisolated static func numberTokens(_ text: String) -> [String] {
+    guard let expression = try? NSRegularExpression(pattern: #"\b\d[\d.,]*\b"#) else {
+      return []
+    }
+    return expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+      Range($0.range, in: text).map { String(text[$0]) }
+    }
   }
 
   private nonisolated static func endsAtSentenceBoundary(_ text: String) -> Bool {

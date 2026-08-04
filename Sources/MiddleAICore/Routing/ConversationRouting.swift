@@ -8,6 +8,25 @@ public protocol ConversationRoutingStrategy: Sendable {
   func route(_ context: ConversationContext) async throws -> RoutingDecision
 }
 
+extension RoutingDecision {
+  public func isValid(for context: ConversationContext) -> Bool {
+    guard confidence.isFinite, (0...1).contains(confidence) else { return false }
+    let knownIDs = Set(context.recent.map(\.id) + [context.current?.id].compactMap { $0 })
+    switch decision {
+    case .continueCurrent:
+      guard context.current != nil else { return false }
+      return chatID == nil || chatID == context.current?.id
+    case .switchChat:
+      guard let chatID else { return false }
+      return knownIDs.contains(chatID) && chatID != context.current?.id
+    case .newChat: return chatID == nil
+    case .askUser:
+      guard let chatID else { return true }
+      return knownIDs.contains(chatID)
+    }
+  }
+}
+
 public struct TextSimilarity: Sendable {
   private static let stopwords: Set<String> = [
     "der", "die", "das", "den", "dem", "ein", "eine", "und", "oder", "ist", "sind", "war", "wie",
@@ -126,16 +145,72 @@ public struct EmbeddingRouter: ConversationRoutingStrategy {
   }
 }
 
+public actor LocalLLMCircuitBreaker {
+  private let failureThreshold: Int
+  private let cooldown: TimeInterval
+  private var consecutiveFailures = 0
+  private var openUntil: Date?
+
+  public init(failureThreshold: Int = 3, cooldown: TimeInterval = 30) {
+    self.failureThreshold = max(1, failureThreshold)
+    self.cooldown = max(1, cooldown)
+  }
+
+  public func allowsRequest(now: Date = Date()) -> Bool {
+    guard let openUntil else { return true }
+    if now >= openUntil {
+      self.openUntil = nil
+      consecutiveFailures = 0
+      return true
+    }
+    return false
+  }
+
+  public func recordSuccess() {
+    consecutiveFailures = 0
+    openUntil = nil
+  }
+
+  public func recordFailure(now: Date = Date()) {
+    consecutiveFailures += 1
+    if consecutiveFailures >= failureThreshold { openUntil = now.addingTimeInterval(cooldown) }
+  }
+}
+
 public struct LLMRouter: ConversationRoutingStrategy {
   public let endpoint: URL
   public let model: String
   public let session: URLSession
-  public init(endpoint: URL, model: String, session: URLSession = .shared) {
+  public let timeout: TimeInterval
+  private let circuitBreaker: LocalLLMCircuitBreaker
+  public init(
+    endpoint: URL, model: String, session: URLSession = .shared, timeout: TimeInterval = 4,
+    circuitBreakerFailures: Int = 3, circuitBreakerCooldown: TimeInterval = 30
+  ) {
     self.endpoint = endpoint
     self.model = model
     self.session = session
+    self.timeout = timeout
+    self.circuitBreaker = LocalLLMCircuitBreaker(
+      failureThreshold: circuitBreakerFailures, cooldown: circuitBreakerCooldown)
   }
   public func route(_ context: ConversationContext) async throws -> RoutingDecision {
+    guard await circuitBreaker.allowsRequest() else {
+      throw MiddleAIError.network("Local router is cooling down after repeated failures")
+    }
+    do {
+      let result = try await performRoute(context)
+      await circuitBreaker.recordSuccess()
+      return result
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      await circuitBreaker.recordFailure()
+      throw error
+    }
+  }
+
+  private func performRoute(_ context: ConversationContext) async throws -> RoutingDecision {
     let candidates = context.recent.prefix(8).map { c in
       ["id": c.id, "title": c.title, "summary": c.summary]
     }
@@ -154,6 +229,7 @@ public struct LLMRouter: ConversationRoutingStrategy {
     ]
     var request = URLRequest(url: completionURL)
     request.httpMethod = "POST"
+    request.timeoutInterval = timeout
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
     let (data, response) = try await session.data(for: request)
@@ -167,6 +243,9 @@ public struct LLMRouter: ConversationRoutingStrategy {
     guard let jsonData = extractJSON(message).data(using: .utf8),
       let result = try? JSONDecoder().decode(RoutingDecision.self, from: jsonData)
     else { throw MiddleAIError.invalidResponse("Local router returned invalid JSON") }
+    guard result.isValid(for: context) else {
+      throw MiddleAIError.invalidResponse("Local router returned an invalid decision")
+    }
     return result
   }
   private var completionURL: URL {
@@ -234,7 +313,8 @@ public struct AppleIntelligenceRouter: ConversationRoutingStrategy {
         let text = result.content
         guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
           let data = String(text[start...end]).data(using: .utf8),
-          let decision = try? JSONDecoder().decode(RoutingDecision.self, from: data)
+          let decision = try? JSONDecoder().decode(RoutingDecision.self, from: data),
+          decision.isValid(for: context)
         else {
           throw MiddleAIError.invalidResponse(
             "Apple Intelligence lieferte keine gültige Chat-Auswahl.")
@@ -251,14 +331,17 @@ public struct HybridRouter: ConversationRoutingStrategy {
   public let heuristic: any ConversationRoutingStrategy
   public let embedding: any ConversationRoutingStrategy
   public let llm: (any ConversationRoutingStrategy)?
+  public let confidenceContinue: Double
   public init(
     heuristic: any ConversationRoutingStrategy,
     embedding: any ConversationRoutingStrategy = EmbeddingRouter(),
-    llm: (any ConversationRoutingStrategy)? = nil
+    llm: (any ConversationRoutingStrategy)? = nil,
+    confidenceContinue: Double = 0.75
   ) {
     self.heuristic = heuristic
     self.embedding = embedding
     self.llm = llm
+    self.confidenceContinue = confidenceContinue
   }
   public func route(_ context: ConversationContext) async throws -> RoutingDecision {
     async let h = heuristic.route(context)
@@ -278,7 +361,7 @@ public struct HybridRouter: ConversationRoutingStrategy {
     // deliberate user preference and must not be overruled by missing lexical overlap.
     if heuristicResult.decision == .continueCurrent,
       embeddingResult.decision == .newChat,
-      heuristicResult.confidence >= 0.75
+      heuristicResult.confidence >= confidenceContinue
     {
       return heuristicResult
     }

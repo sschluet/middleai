@@ -44,11 +44,21 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("HeuristicRouter continuation", testRouterContinuation),
       ("Hosted conversation history", testHostedConversationHistory),
       ("HeuristicRouter new topic", testRouterNewTopic), ("HybridRouter", testHybrid),
+      ("HybridRouter threshold", testHybridThreshold),
       ("ConversationManager", testManager), ("Confidence management", testConfidence),
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
+      ("Voice sample accumulator", AudioTTSRegressionTests.testVoiceAccumulator),
+      ("Private local TTS cache", AudioTTSRegressionTests.testTTSCache),
+      ("TTS preparation concurrency", AudioTTSRegressionTests.testTTSQueueConcurrency),
       ("OpenWebUI cancellation", testResponseCancellation),
       ("OpenWebUI adapter", testAdapter),
       ("Hosted provider model discovery", testHostedProviderModels),
+      ("Provider completion state", ProviderRegressionTests.testOpenWebUICompletionState),
+      ("Hosted retry and terminal states", ProviderRegressionTests.testHostedRetryAndFinishes),
+      ("Provider request serialization", ProviderRegressionTests.testRequestSerialization),
+      ("Atomic conversation exchange", ProviderRegressionTests.testAtomicExchange),
+      ("Hosted context budget", ProviderRegressionTests.testContextBudget),
+      ("Local spoken summary", ProviderRegressionTests.testLocalSpokenSummary),
     ]
     for (name, test) in tests {
       do {
@@ -78,10 +88,15 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.hotkeys.assistant = "right_command"
     c.tts.localCommand = "/tmp/model #1/\"voice\""
     c.tts.outputDeviceUID = "test-output-device"
+    c.tts.pronunciationDictionary = ["OpenWebUI": "Open Web U I"]
+    c.tts.cacheEnabled = false
+    c.tts.cacheMaximumMegabytes = 512
     c.stt.encoderPrecision = "int4"
     c.stt.computeMode = "fast"
     c.stt.language = "auto"
     c.stt.inputDeviceUID = "test-input-device"
+    c.stt.maximumRecordingSeconds = 180
+    c.stt.automaticSilenceStop = true
     c.privacy.localCacheRetentionDays = 365
     c.activeProfile = "coding"
     c.profiles.systemPrompts["coding"] = "Antworte mit wartbarem Swift-Code."
@@ -126,14 +141,31 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
     try expect(parsed.tts.outputDeviceUID == "test-output-device", "output device round-trip")
     try expect(
+      parsed.tts.pronunciationDictionary == ["OpenWebUI": "Open Web U I"]
+        && !parsed.tts.cacheEnabled && parsed.tts.cacheMaximumMegabytes == 512,
+      "TTS local options round-trip")
+    try expect(
       parsed.stt.encoderPrecision == "int4" && parsed.stt.computeMode == "fast"
-        && parsed.stt.language == "auto" && parsed.stt.inputDeviceUID == "test-input-device",
+        && parsed.stt.language == "auto" && parsed.stt.inputDeviceUID == "test-input-device"
+        && parsed.stt.maximumRecordingSeconds == 180 && parsed.stt.automaticSilenceStop,
       "STT settings round-trip")
     try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
     try expect(parsed.activeProfile == "coding", "active profile persistence")
     try expect(
       parsed.profileSystemPrompt(for: "coding") == "Antworte mit wartbarem Swift-Code.",
       "profile prompt persistence")
+    var profiled = parsed
+    profiled.profiles.overrides["coding"] = AppConfig.ProfileOverrides(
+      assistantProvider: "openrouter", model: "profile-model", ttsVoice: "profile-voice",
+      spokenResponseMode: "first_paragraph", contextBudgetCharacters: 12_000)
+    let resolvedProfile = profiled.resolved(for: "coding")
+    try expect(
+      resolvedProfile.assistant.provider == "openrouter"
+        && resolvedProfile.assistantModel == "profile-model"
+        && resolvedProfile.tts.voice == "profile-voice"
+        && resolvedProfile.spokenResponseMode == "first_paragraph"
+        && resolvedProfile.activeContextBudgetCharacters == 12_000,
+      "profile overrides resolve together")
     try expect(AppConfig().api.tokenRequired, "secure API default")
     try expect(
       TTSVoiceCatalog.supertonicVoices.count == 5
@@ -153,6 +185,14 @@ struct FixedRouter: ConversationRoutingStrategy {
     do {
       _ = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(unsafeConfig))
       throw TestFailure.failed("unsafe listener accepted")
+    } catch is MiddleAIError {}
+    var remoteRouter = c
+    remoteRouter.localLLM.enabled = true
+    remoteRouter.localLLM.provider = "llama_cpp"
+    remoteRouter.localLLM.url = "http://example.com:18881"
+    do {
+      _ = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(remoteRouter))
+      throw TestFailure.failed("non-loopback local LLM accepted")
     } catch is MiddleAIError {}
     var conflictingConfig = c
     conflictingConfig.hotkeys.assistant = conflictingConfig.hotkeys.dictation
@@ -223,6 +263,21 @@ struct FixedRouter: ConversationRoutingStrategy {
     let retained = try serverA.read(account: "password")
     try expect(second == "second-server", "second scope migrated")
     try expect(retained == "updated", "first scope retained")
+
+    let existingScopedAccount = serverA.scopedAccount(for: "password")
+    try base.save("old-secret", account: existingScopedAccount)
+    let trial = TrialCredentialStore(
+      base: base, accounts: ["password", existingScopedAccount], value: "new-secret")
+    let trialScope = ScopedCredentialStore(
+      base: trial, baseURL: "https://AI.example/", profile: "Default")
+    let trialSecret = try trialScope.read(account: "password")
+    let persistedAfterTrial = try base.read(account: existingScopedAccount)
+    try expect(
+      trialSecret == "new-secret",
+      "trial credential overrides legacy and existing scoped secret")
+    try expect(
+      persistedAfterTrial == "old-secret",
+      "trial credential leaves persisted secret unchanged")
 
     let localToken = try LocalInputServer.ensureLocalAPIToken(in: base)
     let repeatedToken = try LocalInputServer.ensureLocalAPIToken(in: base)
@@ -494,6 +549,24 @@ struct FixedRouter: ConversationRoutingStrategy {
       ConversationContext(input: "Und welcher Speicher?", current: c, recent: [c], messages: [:]))
     try expect(r.decision == RoutingDecisionKind.continueCurrent, "hybrid decision")
     try expect(r.confidence > 0.6, "hybrid confidence")
+  }
+  static func testHybridThreshold() async throws {
+    let current = Conversation(title: "Aktuell")
+    let context = ConversationContext(
+      input: "Warum?", current: current, recent: [current], messages: [:])
+    let heuristic = FixedRouter(
+      result: RoutingDecision(
+        decision: .continueCurrent, chatID: current.id, confidence: 0.76, reason: "follow-up"))
+    let embedding = FixedRouter(
+      result: RoutingDecision(decision: .newChat, confidence: 0.90, reason: "no overlap"))
+    let strict = try await HybridRouter(
+      heuristic: heuristic, embedding: embedding, confidenceContinue: 0.80
+    ).route(context)
+    let permissive = try await HybridRouter(
+      heuristic: heuristic, embedding: embedding, confidenceContinue: 0.70
+    ).route(context)
+    try expect(strict.decision == .newChat, "configured strict continuation threshold")
+    try expect(permissive.decision == .continueCurrent, "configured permissive threshold")
   }
   static func testManager() async throws {
     let store = InMemoryConversationStore()

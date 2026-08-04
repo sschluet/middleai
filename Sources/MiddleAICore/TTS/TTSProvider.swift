@@ -2,7 +2,6 @@
 import CryptoKit
 import FluidAudio
 import Foundation
-@preconcurrency import MLXAudioTTS
 import NaturalLanguage
 
 @MainActor public protocol TTSProvider: AnyObject {
@@ -25,6 +24,7 @@ extension TTSProvider {
 @MainActor private final class AudioFilePlayer: NSObject {
   private var player: AVAudioPlayer?
   private var continuation: CheckedContinuation<Void, Error>?
+  private var watchdog: Task<Void, Never>?
   var isPlaying: Bool { player?.isPlaying == true }
 
   func play(_ url: URL) async throws {
@@ -36,47 +36,59 @@ extension TTSProvider {
     next.delegate = self
     next.prepareToPlay()
     player = next
-    try await withCheckedThrowingContinuation { continuation in
-      self.continuation = continuation
-      if !next.play(), TTSOutputDevicePreference.uid != "system_default" {
-        next.currentDevice = nil
-        next.prepareToPlay()
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        self.continuation = continuation
+        var started = next.play()
+        if !started, TTSOutputDevicePreference.uid != "system_default" {
+          next.currentDevice = nil
+          next.prepareToPlay()
+          started = next.play()
+        }
+        guard started else {
+          finish(.failure(MiddleAIError.invalidResponse("Es ist kein Ausgabegerät verfügbar")))
+          return
+        }
+        let timeout = max(5, min(900, next.duration * 2 + 5))
+        watchdog = Task { [weak self] in
+          try? await Task.sleep(for: .seconds(timeout))
+          guard !Task.isCancelled else { return }
+          self?.finish(
+            .failure(
+              MiddleAIError.invalidResponse("Audiowiedergabe hat das Zeitlimit überschritten")))
+        }
       }
-      guard next.isPlaying || next.play() else {
-        self.continuation = nil
-        self.player = nil
-        continuation.resume(
-          throwing: MiddleAIError.invalidResponse("Es ist kein Ausgabegerät verfügbar"))
-        return
-      }
+    } onCancel: {
+      Task { @MainActor [weak self] in self?.stop() }
     }
   }
 
   func stop() {
     player?.stop()
-    player = nil
-    continuation?.resume()
-    continuation = nil
+    finish(.failure(CancellationError()))
   }
 
   fileprivate func didFinish(successfully flag: Bool) {
-    self.player = nil
-    let pending = continuation
-    continuation = nil
     if flag {
-      pending?.resume()
+      finish(.success(()))
     } else {
-      pending?.resume(
-        throwing: MiddleAIError.invalidResponse("Die Audiowiedergabe wurde unterbrochen"))
+      finish(.failure(MiddleAIError.invalidResponse("Die Audiowiedergabe wurde unterbrochen")))
     }
   }
 
   fileprivate func didFail(_ error: Error?) {
-    self.player = nil
+    finish(
+      .failure(error ?? MiddleAIError.invalidResponse("Audio konnte nicht dekodiert werden")))
+  }
+
+  private func finish(_ result: Result<Void, Error>) {
+    watchdog?.cancel()
+    watchdog = nil
+    player?.stop()
+    player = nil
     let pending = continuation
     continuation = nil
-    pending?.resume(
-      throwing: error ?? MiddleAIError.invalidResponse("Audio konnte nicht dekodiert werden"))
+    pending?.resume(with: result)
   }
 }
 
@@ -87,16 +99,30 @@ private final class SpeechAudioRenderer: @unchecked Sendable {
   private var file: AVAudioFile?
   private var continuation: CheckedContinuation<URL, Error>?
   private var completed = false
+  private var watchdog: Task<Void, Never>?
+  private weak var synthesizer: AVSpeechSynthesizer?
 
   @MainActor func render(_ utterance: AVSpeechUtterance, with synthesizer: AVSpeechSynthesizer)
     async throws
     -> URL
   {
-    try await withCheckedThrowingContinuation { continuation in
-      lock.lock()
-      self.continuation = continuation
-      lock.unlock()
-      synthesizer.write(utterance) { [self] buffer in consume(buffer) }
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        self.synthesizer = synthesizer
+        lock.lock()
+        self.continuation = continuation
+        watchdog = Task { [weak self] in
+          try? await Task.sleep(for: .seconds(45))
+          guard !Task.isCancelled else { return }
+          self?.requestStop(
+            error: MiddleAIError.invalidResponse(
+              "Das Rendern der Systemstimme dauerte zu lange"))
+        }
+        lock.unlock()
+        synthesizer.write(utterance) { [self] buffer in consume(buffer) }
+      }
+    } onCancel: {
+      self.requestStop(error: CancellationError())
     }
   }
 
@@ -105,24 +131,43 @@ private final class SpeechAudioRenderer: @unchecked Sendable {
     defer { lock.unlock() }
     guard !completed else { return }
     guard let pcm = buffer as? AVAudioPCMBuffer else {
-      complete(.failure(MiddleAIError.invalidResponse("Systemstimme lieferte kein PCM-Audio")))
+      completeLocked(
+        .failure(MiddleAIError.invalidResponse("Systemstimme lieferte kein PCM-Audio")))
       return
     }
     if pcm.frameLength == 0 {
-      complete(.success(url))
+      completeLocked(.success(url))
       return
     }
     do {
       if file == nil { file = try AVAudioFile(forWriting: url, settings: pcm.format.settings) }
       try file?.write(from: pcm)
-    } catch { complete(.failure(error)) }
+    } catch { completeLocked(.failure(error)) }
   }
 
-  private func complete(_ result: Result<URL, Error>) {
+  private func fail(_ error: Error) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return }
+    completeLocked(.failure(error))
+  }
+
+  private func requestStop(error: Error) {
+    Task { @MainActor [weak self] in
+      self?.synthesizer?.stopSpeaking(at: .immediate)
+      self?.fail(error)
+    }
+  }
+
+  private func completeLocked(_ result: Result<URL, Error>) {
     completed = true
     file = nil
+    watchdog?.cancel()
+    watchdog = nil
+    synthesizer = nil
     let pending = continuation
     continuation = nil
+    if case .failure = result { try? FileManager.default.removeItem(at: url) }
     pending?.resume(with: result)
   }
 }
@@ -408,16 +453,25 @@ public enum SpeechTextProcessor {
     ("API", "Ei Pi Ei"),
   ]
 
-  public static func speechReadyGermanText(_ text: String) -> String {
+  public static func speechReadyGermanText(
+    _ text: String, customPronunciations: [String: String] = [:]
+  ) -> String {
     var result = normalizeGermanNumbers(in: SpokenResponseSummarizer.plainText(text))
-    for (source, pronunciation) in germanPronunciationAliases {
+    var aliasesByName = Dictionary(uniqueKeysWithValues: germanPronunciationAliases)
+    for (source, pronunciation) in customPronunciations
+    where !source.isEmpty && !pronunciation.isEmpty {
+      aliasesByName[source] = pronunciation
+    }
+    let aliases = aliasesByName.sorted { $0.key.count > $1.key.count }
+    for (source, pronunciation) in aliases {
       let escaped = NSRegularExpression.escapedPattern(for: source)
       guard
         let expression = try? NSRegularExpression(
           pattern: "(?i)(?<!\\p{L})\(escaped)(?!\\p{L})")
       else { continue }
       result = expression.stringByReplacingMatches(
-        in: result, range: NSRange(result.startIndex..., in: result), withTemplate: pronunciation)
+        in: result, range: NSRange(result.startIndex..., in: result),
+        withTemplate: NSRegularExpression.escapedTemplate(for: pronunciation))
     }
     return result
   }
@@ -556,11 +610,14 @@ public enum SpeechTextProcessor {
   private let synthesizer = AVSpeechSynthesizer()
   private let audioPlayer = AudioFilePlayer()
   private var continuation: CheckedContinuation<Void, Error>?
+  private var speechWatchdog: Task<Void, Never>?
   public var voice: String
   public var rate: Float
-  public init(voice: String = "", rate: Float = 1) {
+  private let options: TTSLocalOptions
+  public init(voice: String = "", rate: Float = 1, options: TTSLocalOptions = .init()) {
     self.voice = voice
     self.rate = rate
+    self.options = options
     super.init()
     synthesizer.delegate = self
   }
@@ -568,16 +625,32 @@ public enum SpeechTextProcessor {
   public func speak(_ text: String) async throws {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     if isSpeaking { stop() }
-    let utterance = AVSpeechUtterance(string: SpeechTextProcessor.speechReadyGermanText(text))
+    let utterance = AVSpeechUtterance(
+      string: SpeechTextProcessor.speechReadyGermanText(
+        text, customPronunciations: options.pronunciations))
     utterance.voice = Self.resolveVoice(voice) ?? Self.bestInstalledGermanVoice()
     utterance.rate = max(
       AVSpeechUtteranceMinimumSpeechRate,
       min(AVSpeechUtteranceMaximumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * rate * 0.96))
     utterance.pitchMultiplier = 1.0
     if TTSOutputDevicePreference.uid == "system_default" {
-      try await withCheckedThrowingContinuation { c in
-        continuation = c
-        synthesizer.speak(utterance)
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { c in
+          continuation = c
+          synthesizer.speak(utterance)
+          let timeout = max(15, min(900, Double(text.count) / 5 + 20))
+          speechWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled else { return }
+            self?.synthesizer.stopSpeaking(at: .immediate)
+            self?.finishSpeech(
+              .failure(
+                MiddleAIError.invalidResponse(
+                  "Die macOS-Sprachausgabe hat das Zeitlimit überschritten")))
+          }
+        }
+      } onCancel: {
+        Task { @MainActor [weak self] in self?.stop() }
       }
     } else {
       let renderer = SpeechAudioRenderer()
@@ -589,8 +662,14 @@ public enum SpeechTextProcessor {
   public func stop() {
     synthesizer.stopSpeaking(at: .immediate)
     audioPlayer.stop()
-    continuation?.resume()
+    finishSpeech(.failure(CancellationError()))
+  }
+  private func finishSpeech(_ result: Result<Void, Error>) {
+    speechWatchdog?.cancel()
+    speechWatchdog = nil
+    let pending = continuation
     continuation = nil
+    pending?.resume(with: result)
   }
   public static func bestInstalledGermanVoice() -> AVSpeechSynthesisVoice? {
     AVSpeechSynthesisVoice.speechVoices()
@@ -619,14 +698,12 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   public func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
   ) {
-    continuation?.resume()
-    continuation = nil
+    finishSpeech(.success(()))
   }
   public func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
   ) {
-    continuation?.resume()
-    continuation = nil
+    finishSpeech(.failure(CancellationError()))
   }
 }
 
@@ -634,6 +711,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private let manager: PocketTtsManager
   private let voice: String
   private let temperature: Float
+  private let options: TTSLocalOptions
   private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
   private var initializationTask: Task<Void, Error>?
@@ -641,9 +719,13 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private var generation: UInt64 = 0
   private var isPreparing = false
 
-  public init(voice: String = "anna", highQuality: Bool = true, temperature: Float = 0.65) {
+  public init(
+    voice: String = "anna", highQuality: Bool = true, temperature: Float = 0.65,
+    options: TTSLocalOptions = .init()
+  ) {
     self.voice = voice.isEmpty ? "anna" : voice
     self.temperature = min(max(temperature, 0.1), 1.2)
+    self.options = options
     self.manager = PocketTtsManager(
       defaultVoice: voice.isEmpty ? "anna" : voice,
       language: highQuality ? .german24L : .german,
@@ -660,8 +742,19 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
 
   public func render(_ text: String) async throws -> Data {
     try await ensureInitialized()
-    return try await manager.synthesize(
-      text: text, voice: voice, temperature: temperature, deEss: true)
+    let prepared = SpeechTextProcessor.speechReadyGermanText(
+      text, customPronunciations: options.pronunciations)
+    let key = TTSAudioCache.key(provider: "pockettts", voice: voice, rate: 1, text: prepared)
+    if let cached = await TTSAudioCache.shared.data(
+      for: key, maximumBytes: options.cacheMaximumBytes)
+    {
+      return cached
+    }
+    let audio = try await manager.synthesize(
+      text: prepared, voice: voice, temperature: temperature, deEss: true)
+    try? await TTSAudioCache.shared.store(
+      audio, for: key, maximumBytes: options.cacheMaximumBytes)
+    return audio
   }
 
   public func speak(_ text: String) async throws {
@@ -724,6 +817,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private let voice: Supertonic3Voice
   private let speed: Float
   private let totalSteps: Int
+  private let options: TTSLocalOptions
   private var style: Supertonic3VoiceStyle?
   private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
@@ -732,10 +826,14 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   private var generation: UInt64 = 0
   private var isPreparing = false
 
-  public init(voice: String = "F1", rate: Float = 1, highQuality: Bool = true) {
+  public init(
+    voice: String = "F1", rate: Float = 1, highQuality: Bool = true,
+    options: TTSLocalOptions = .init()
+  ) {
     self.voice = Supertonic3Voice(name: voice) ?? .f1
     self.speed = min(max(rate, 0.55), 1.9)
     self.totalSteps = highQuality ? 12 : 6
+    self.options = options
     super.init()
   }
 
@@ -750,12 +848,23 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
     guard let style else {
       throw MiddleAIError.invalidResponse("Supertonic voice style is unavailable")
     }
-    let prepared = SpeechTextProcessor.speechReadyGermanText(text)
+    let prepared = SpeechTextProcessor.speechReadyGermanText(
+      text, customPronunciations: options.pronunciations)
+    let key = TTSAudioCache.key(
+      provider: "supertonic3", voice: voice.rawValue, rate: speed, text: prepared)
+    if let cached = await TTSAudioCache.shared.data(
+      for: key, maximumBytes: options.cacheMaximumBytes)
+    {
+      return cached
+    }
     let result = try await manager.synthesize(
       text: prepared, language: "de", style: style, totalSteps: totalSteps,
       speed: speed, silenceDuration: 0.12)
-    return try AudioWAV.data(
+    let audio = try AudioWAV.data(
       from: result.samples, sampleRate: Double(Supertonic3Constants.sampleRate), normalize: false)
+    try? await TTSAudioCache.shared.store(
+      audio, for: key, maximumBytes: options.cacheMaximumBytes)
+    return audio
   }
 
   public func speak(_ text: String) async throws {
@@ -851,92 +960,6 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
   }
 }
 
-/// Native Apple-Silicon inference for Qwen3-TTS VoiceDesign. The model is downloaded
-/// once through Hugging Face and then runs entirely on-device through MLX.
-private struct SendableSpeechGenerationModel: @unchecked Sendable {
-  let raw: any SpeechGenerationModel
-
-  var sampleRate: Int { raw.sampleRate }
-
-  func generateSamples(text: String, voice: String) async throws -> [Float] {
-    let audio = try await raw.generate(
-      text: text, voice: voice, refAudio: nil, refText: nil, language: "German",
-      generationParameters: nil)
-    return audio.asArray(Float.self)
-  }
-}
-
-@MainActor public final class Qwen3TTSProvider: TTSProvider {
-  private static let modelRepository =
-    "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit"
-
-  private let voicePrompt: String
-  private var model: SendableSpeechGenerationModel?
-  private let audioPlayer = AudioFilePlayer()
-  private var temporaryAudioURL: URL?
-  private var generation: UInt64 = 0
-  private var isPreparing = false
-
-  public init(voice: String, rate: Float, temperature: Float = 0.72) {
-    self.voicePrompt = TTSVoiceCatalog.qwenVoicePrompt(for: voice, rate: rate)
-    _ = temperature
-  }
-
-  public var isSpeaking: Bool { isPreparing || audioPlayer.isPlaying }
-
-  public func prepare() async throws {
-    _ = try await ensureModel()
-  }
-
-  public func speak(_ text: String) async throws {
-    let clean = SpokenResponseSummarizer.plainText(text)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !clean.isEmpty else { return }
-    stop()
-    generation &+= 1
-    let currentGeneration = generation
-    isPreparing = true
-    do {
-      let loadedModel = try await ensureModel()
-      let samples = try await loadedModel.generateSamples(text: clean, voice: voicePrompt)
-      try Task.checkCancellation()
-      guard generation == currentGeneration else { throw CancellationError() }
-      let wav = try AudioWAV.data(
-        from: samples, sampleRate: Double(loadedModel.sampleRate), normalize: false)
-      let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-        "middleai-qwen3-tts-\(UUID().uuidString).wav")
-      try wav.write(to: audioURL, options: Data.WritingOptions.atomic)
-      temporaryAudioURL = audioURL
-      defer { cleanupTemporaryAudio() }
-      isPreparing = false
-      try await audioPlayer.play(audioURL)
-    } catch {
-      isPreparing = false
-      throw error
-    }
-  }
-
-  public func stop() {
-    generation &+= 1
-    audioPlayer.stop()
-    cleanupTemporaryAudio()
-    isPreparing = false
-  }
-
-  private func ensureModel() async throws -> SendableSpeechGenerationModel {
-    if let model { return model }
-    let loaded = try await TTS.loadModel(modelRepo: Self.modelRepository)
-    let wrapped = SendableSpeechGenerationModel(raw: loaded)
-    model = wrapped
-    return wrapped
-  }
-
-  private func cleanupTemporaryAudio() {
-    if let temporaryAudioURL { try? FileManager.default.removeItem(at: temporaryAudioURL) }
-    temporaryAudioURL = nil
-  }
-}
-
 /// Mistral Voxtral TTS running locally through a MiddleAI-managed Python/MLX runtime.
 /// The persistent worker keeps the 4-bit model in memory between utterances.
 @MainActor public final class VoxtralTTSProvider: TTSProvider {
@@ -952,6 +975,7 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   private let voice: String
   private let voicePrompt: String
   private let rate: Float
+  private let options: TTSLocalOptions
   private var runnerProcess: Process?
   private var runnerInput: FileHandle?
   private var runnerOutput: Pipe?
@@ -959,12 +983,14 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   private var outputBuffer = Data()
   private var ready = false
   private var isPreparing = false
+  private var runnerPreparationTask: Task<Void, Error>?
+  private var runnerPreparationGeneration: UInt64 = 0
   private var readyContinuation: CheckedContinuation<Void, Error>?
   private var generationContinuation: CheckedContinuation<URL, Error>?
   private let audioPlayer = AudioFilePlayer()
   private var temporaryAudioURL: URL?
 
-  public init(voice: String) {
+  public init(voice: String, options: TTSLocalOptions = .init()) {
     self.engine = "voxtral_tts"
     self.modelRepository = "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit"
     self.voice =
@@ -972,25 +998,30 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
       ? voice : "de_female"
     self.voicePrompt = ""
     self.rate = 1
+    self.options = options
   }
 
   private init(
-    engine: String, modelRepository: String, voice: String, voicePrompt: String, rate: Float
+    engine: String, modelRepository: String, voice: String, voicePrompt: String, rate: Float,
+    options: TTSLocalOptions
   ) {
     self.engine = engine
     self.modelRepository = modelRepository
     self.voice = voice
     self.voicePrompt = voicePrompt
     self.rate = rate
+    self.options = options
   }
 
-  public static func qwen(voice: String, rate: Float) -> VoxtralTTSProvider {
+  public static func qwen(
+    voice: String, rate: Float, options: TTSLocalOptions = .init()
+  ) -> VoxtralTTSProvider {
     VoxtralTTSProvider(
       engine: "qwen3_tts",
       modelRepository: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-4bit",
       voice: "",
       voicePrompt: TTSVoiceCatalog.qwenVoicePrompt(for: voice, rate: rate),
-      rate: rate)
+      rate: rate, options: options)
   }
 
   public var isSpeaking: Bool {
@@ -1002,15 +1033,26 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   }
 
   public func speak(_ text: String) async throws {
-    let clean = SpokenResponseSummarizer.plainText(text)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let clean = SpeechTextProcessor.speechReadyGermanText(
+      text, customPronunciations: options.pronunciations
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !clean.isEmpty else { return }
     stopPlayback()
-    try await ensureRunner()
-
+    let key = TTSAudioCache.key(
+      provider: engine, voice: voice + voicePrompt, rate: rate, text: clean)
     let audioURL = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-voxtral-\(UUID().uuidString).wav")
     temporaryAudioURL = audioURL
+    if let cached = await TTSAudioCache.shared.data(
+      for: key, maximumBytes: options.cacheMaximumBytes)
+    {
+      try cached.write(to: audioURL, options: .atomic)
+      try await play(audioURL)
+      return
+    }
+    try await ensureRunner()
+
     let payload: [String: Any] = [
       "action": "speak", "text": clean, "voice": voice, "instruct": voicePrompt,
       "rate": rate, "output": audioURL.path,
@@ -1019,36 +1061,61 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     guard let input = runnerInput else {
       throw MiddleAIError.invalidResponse("Voxtral-Prozess ist nicht erreichbar")
     }
-    _ = try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<URL, Error>) in
-      generationContinuation = continuation
-      do {
-        try input.write(contentsOf: data + Data([0x0A]))
-      } catch {
-        generationContinuation = nil
-        continuation.resume(throwing: error)
+    guard generationContinuation == nil else {
+      throw MiddleAIError.invalidResponse("Die TTS-Engine verarbeitet bereits eine Ausgabe")
+    }
+    _ = try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<URL, Error>) in
+        generationContinuation = continuation
+        do {
+          try input.write(contentsOf: data + Data([0x0A]))
+        } catch {
+          generationContinuation = nil
+          continuation.resume(throwing: error)
+        }
       }
+    } onCancel: {
+      Task { @MainActor [weak self] in self?.stop() }
     }
     try Task.checkCancellation()
+    if let rendered = try? Data(contentsOf: audioURL) {
+      try? await TTSAudioCache.shared.store(
+        rendered, for: key, maximumBytes: options.cacheMaximumBytes)
+    }
     try await play(audioURL)
   }
 
   public func stop() {
     stopPlayback()
     if generationContinuation != nil || isPreparing {
+      runnerPreparationGeneration &+= 1
+      runnerPreparationTask?.cancel()
+      runnerPreparationTask = nil
       terminateRunner(error: CancellationError())
     }
   }
 
   private func ensureRunner() async throws {
     if ready, runnerProcess?.isRunning == true { return }
-    if isPreparing {
-      try await withCheckedThrowingContinuation {
-        (continuation: CheckedContinuation<Void, Error>) in
-        readyContinuation = continuation
-      }
-      return
+    if let runnerPreparationTask { return try await runnerPreparationTask.value }
+    runnerPreparationGeneration &+= 1
+    let generation = runnerPreparationGeneration
+    let task = Task { try await startRunner() }
+    runnerPreparationTask = task
+    do {
+      try await task.value
+      try Task.checkCancellation()
+      guard runnerPreparationGeneration == generation else { throw CancellationError() }
+      if runnerPreparationGeneration == generation { runnerPreparationTask = nil }
+    } catch {
+      if runnerPreparationGeneration == generation { runnerPreparationTask = nil }
+      throw error
     }
+  }
+
+  private func startRunner() async throws {
+    if ready, runnerProcess?.isRunning == true { return }
     isPreparing = true
     let python: URL
     do {
@@ -1423,16 +1490,40 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
   private let provider: any TTSProvider
   private var pending: [String] = []
   private var task: Task<Void, Never>?
+  private var preparationTask: Task<Void, Error>?
+  private var preparationGeneration: UInt64 = 0
   private var taskGeneration: UInt64 = 0
+  public var onError: (@MainActor @Sendable (String) -> Void)?
+  public private(set) var lastErrorMessage: String?
   public private(set) var enabled: Bool
-  public init(provider: any TTSProvider, enabled: Bool = true) {
+  public init(
+    provider: any TTSProvider, enabled: Bool = true,
+    onError: (@MainActor @Sendable (String) -> Void)? = nil
+  ) {
     self.provider = provider
     self.enabled = enabled
+    self.onError = onError
   }
   public var isSpeaking: Bool { task != nil || provider.isSpeaking || !pending.isEmpty }
-  public func prepare() async throws { try await provider.prepare() }
+  public func prepare() async throws {
+    if let preparationTask { return try await preparationTask.value }
+    preparationGeneration &+= 1
+    let generation = preparationGeneration
+    let task = Task { try await provider.prepare() }
+    preparationTask = task
+    do {
+      try await task.value
+      try Task.checkCancellation()
+      guard preparationGeneration == generation else { throw CancellationError() }
+      if preparationGeneration == generation { preparationTask = nil }
+    } catch {
+      if preparationGeneration == generation { preparationTask = nil }
+      throw error
+    }
+  }
   public func enqueue(_ sentence: String) {
     guard enabled else { return }
+    lastErrorMessage = nil
     pending.append(sentence)
     startIfNeeded()
   }
@@ -1441,6 +1532,9 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     if !value { stop() }
   }
   public func stop() {
+    preparationGeneration &+= 1
+    preparationTask?.cancel()
+    preparationTask = nil
     taskGeneration &+= 1
     pending.removeAll()
     provider.stop()
@@ -1452,6 +1546,9 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
       try Task.checkCancellation()
       try await Task.sleep(for: .milliseconds(40))
     }
+    if let lastErrorMessage {
+      throw MiddleAIError.invalidResponse(lastErrorMessage)
+    }
   }
   private func startIfNeeded() {
     guard task == nil else { return }
@@ -1460,7 +1557,17 @@ private struct SendableSpeechGenerationModel: @unchecked Sendable {
     task = Task { [weak self] in
       while let self, !Task.isCancelled, !self.pending.isEmpty {
         let next = self.pending.removeFirst()
-        try? await self.provider.speak(next)
+        do {
+          try await self.provider.speak(next)
+        } catch is CancellationError {
+          break
+        } catch {
+          let message = error.localizedDescription
+          self.lastErrorMessage = message
+          self.onError?(message)
+          self.pending.removeAll()
+          break
+        }
       }
       if self?.taskGeneration == generation { self?.task = nil }
     }

@@ -53,3 +53,11 @@ jobs:
 
       - name: Run structured Swift tests with coverage
         run: swift test -c debug --enable-code-coverage
+
+      - name: Build and verify application bundle
+        env:
+          MIDDLEAI_BUILD_ARCH: arm64
+        run: |
+          ./scripts/build-app.sh
+          codesign --verify --deep --strict --verbose=2 dist/MiddleAI.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/MiddleAI.app/Contents/Info.plist)" = "de.middleai.app"

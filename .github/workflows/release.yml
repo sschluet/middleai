@@ -87,11 +87,21 @@ jobs:
       - name: Publish GitHub release
         shell: bash
         run: |
-          gh release create "$RELEASE_TAG" \
-            "$RELEASE_ARCHIVE" \
-            "$RELEASE_ARCHIVE.sha256" \
-            "$RELEASE_DEPENDENCIES" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "MiddleAI $RELEASE_TAG" \
-            --generate-notes \
-            --notes "Apple-Silicon-App für macOS 14 oder neuer. Das ZIP enthält MiddleAI.app. Dieser Entwicklungsbuild ist ad-hoc signiert und noch nicht von Apple notarisiert; beim ersten Start kann Rechtsklick und Öffnen erforderlich sein."
+          release_notes="Apple-Silicon-App für macOS 14 oder neuer. Das ZIP enthält MiddleAI.app. Dieser Entwicklungsbuild ist ad-hoc signiert und noch nicht von Apple notarisiert; beim ersten Start kann Rechtsklick und Öffnen erforderlich sein."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "$RELEASE_ARCHIVE" \
+              "$RELEASE_ARCHIVE.sha256" \
+              "$RELEASE_DEPENDENCIES" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "$RELEASE_ARCHIVE" \
+              "$RELEASE_ARCHIVE.sha256" \
+              "$RELEASE_DEPENDENCIES" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "MiddleAI $RELEASE_TAG" \
+              --generate-notes \
+              --notes "$release_notes"
+          fi

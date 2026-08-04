@@ -73,6 +73,58 @@ final class MiddleAICoreTests: XCTestCase {
       "Prüfe jede Quelle und benenne Unsicherheiten.")
   }
 
+  func testProfileOverridesAreResolvedWithoutMutatingGlobalDefaults() throws {
+    var config = AppConfig()
+    config.activeProfile = "research"
+    config.openwebui.model = "global-model"
+    config.tts.voice = "global-voice"
+    config.profiles.overrides["research"] = AppConfig.ProfileOverrides(
+      assistantProvider: "openrouter", model: "profile-model", ttsVoice: "profile-voice",
+      spokenResponseMode: "first_paragraph", contextBudgetCharacters: 12_000)
+
+    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    let resolved = parsed.resolved()
+
+    XCTAssertEqual(resolved.assistant.provider, "openrouter")
+    XCTAssertEqual(resolved.openrouter.model, "profile-model")
+    XCTAssertEqual(resolved.tts.voice, "profile-voice")
+    XCTAssertEqual(resolved.spokenResponseMode, "first_paragraph")
+    XCTAssertEqual(resolved.activeContextBudgetCharacters, 12_000)
+    XCTAssertEqual(parsed.assistant.provider, "openwebui")
+    XCTAssertEqual(parsed.openwebui.model, "global-model")
+    XCTAssertEqual(parsed.tts.voice, "global-voice")
+  }
+
+  func testConfigurationRejectsUnsafeLocalLLMAndInvalidProfileOverrides() throws {
+    var remoteLLM = AppConfig()
+    remoteLLM.localLLM.enabled = true
+    remoteLLM.localLLM.provider = "llama_cpp"
+    remoteLLM.localLLM.url = "http://example.com:18881"
+    XCTAssertThrowsError(try ConfigLoader.parseYAML(ConfigLoader.renderYAML(remoteLLM)))
+
+    var invalidProfile = AppConfig()
+    invalidProfile.profiles.overrides["coding"] = AppConfig.ProfileOverrides(
+      contextBudgetCharacters: 3_999)
+    XCTAssertThrowsError(try ConfigLoader.parseYAML(ConfigLoader.renderYAML(invalidProfile)))
+  }
+
+  func testSupportReportOmitsSecretsAndFailedDetails() {
+    let report = SupportBundleBuilder.report(
+      environment: SupportBundleEnvironment(
+        appVersion: "1.0", operatingSystem: "macOS", architecture: "arm64",
+        assistantProvider: "OpenWebUI", ttsProvider: "macOS", activeProfile: "default",
+        privateSession: true),
+      checks: [
+        DiagnosticCheck(name: "Verbindung", passed: false, detail: "https://secret.example/user"),
+        DiagnosticCheck(name: "Dateirechte", passed: true, detail: "600; erwartet 600"),
+      ],
+      localModelStates: [(name: "TTS", state: "bereit", size: "1 GB")])
+
+    XCTAssertTrue(report.contains("Private Sitzung: aktiv"))
+    XCTAssertTrue(report.contains("600; erwartet 600"))
+    XCTAssertFalse(report.contains("secret.example"))
+  }
+
   func testResearchFallbackSelectsConclusionsAndNextSteps() {
     let response =
       "Die Recherche umfasst fünf Märkte und zahlreiche Quellen. "
@@ -118,6 +170,45 @@ final class MiddleAICoreTests: XCTestCase {
     try store.deleteAllConversations()
     XCTAssertEqual(
       try store.cacheStatistics(), ConversationCacheStatistics(conversations: 0, messages: 0))
+  }
+
+  func testConversationExchangePersistsBothSidesAndMetadataTogether() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "middleai-exchange-tests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try SQLiteConversationStore(
+      path: directory.appendingPathComponent("cache.sqlite").path)
+    var conversation = Conversation(title: "Atomic")
+    try store.saveConversation(conversation)
+    conversation.summary = "Complete"
+    let user = Message(role: .user, content: "Frage")
+    let assistant = Message(role: .assistant, content: "Antwort")
+
+    try store.saveExchange(user: user, assistant: assistant, conversation: conversation)
+
+    let messages = try store.messages(conversationID: conversation.id, limit: 10)
+    XCTAssertEqual(messages.map(\.id), [user.id, assistant.id])
+    XCTAssertEqual(messages.map(\.role), [.user, .assistant])
+    XCTAssertEqual(messages.map(\.content), ["Frage", "Antwort"])
+    XCTAssertEqual(try store.conversation(id: conversation.id)?.summary, "Complete")
+    XCTAssertEqual(try store.setting(key: "current_conversation_id"), conversation.id)
+  }
+
+  func testHostedContextWindowRetainsSystemAndNewestTurnWithinBudget() {
+    let messages =
+      [Message(role: .system, content: "Systemregeln")]
+      + (0..<30).map { index in
+        Message(
+          role: index.isMultiple(of: 2) ? .user : .assistant,
+          content: "Nachricht \(index) " + String(repeating: "Inhalt ", count: 80))
+      }
+
+    let prepared = HostedContextWindow.prepared(messages, maximumEstimatedTokens: 700)
+
+    XCTAssertLessThanOrEqual(HostedContextWindow.estimatedTokens(prepared), 700)
+    XCTAssertEqual(prepared.first?.role, .system)
+    XCTAssertTrue(prepared.last?.content.contains("Nachricht 29") == true)
+    XCTAssertTrue(prepared.contains { $0.content.contains("Lokale Zusammenfassung") })
   }
 
   func testMultipleSpokenListsAndLiteralCommands() {

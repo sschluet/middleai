@@ -8,6 +8,32 @@ public protocol CredentialStore: Sendable {
   func delete(account: String) throws
 }
 
+/// An in-memory overlay used to verify replacement credentials without mutating the Keychain.
+/// Callers should override both a legacy and any scoped account that may be read during a trial.
+public final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
+  private let base: any CredentialStore
+  private let lock = NSLock()
+  private var overrides: [String: String]
+
+  public init(base: any CredentialStore, accounts: [String], value: String) {
+    self.base = base
+    self.overrides = Dictionary(uniqueKeysWithValues: accounts.map { ($0, value) })
+  }
+
+  public func save(_ value: String, account: String) throws {
+    lock.withLock { overrides[account] = value }
+  }
+
+  public func read(account: String) throws -> String? {
+    if let value = lock.withLock({ overrides[account] }) { return value }
+    return try base.read(account: account)
+  }
+
+  public func delete(account: String) throws {
+    lock.withLock { _ = overrides.removeValue(forKey: account) }
+  }
+}
+
 public struct KeychainCredentialStore: CredentialStore, Sendable {
   public let service: String
   public init(service: String = "de.middleai.openwebui") { self.service = service }

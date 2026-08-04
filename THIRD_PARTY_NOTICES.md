@@ -59,33 +59,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## MLX Audio Swift
-
-MiddleAI uses MLX Audio Swift for native on-device Qwen3-TTS inference on
-Apple Silicon: <https://github.com/Blaizzy/mlx-audio-swift>.
-MLX Audio Swift is licensed under the MIT License. Its own dependency and model
-notices continue to apply.
-
-Copyright (c) 2025 Prince Canuma
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 ## Qwen3-TTS
 
 The optional Qwen3-TTS VoiceDesign model is developed by the Qwen team:
@@ -104,6 +77,6 @@ Source: <https://huggingface.co/mistralai/Voxtral-4B-TTS-2603>
 
 ## MLX Audio for Python
 
-The optional Voxtral runtime uses MLX Audio, distributed under the MIT License.
+The optional Qwen3-TTS and Voxtral runtimes use MLX Audio, distributed under the MIT License.
 
 Source: <https://github.com/Blaizzy/mlx-audio>

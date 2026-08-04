@@ -12,9 +12,10 @@ public enum InputResult: Sendable, Equatable {
   public let ttsQueue: TTSQueue
   private let pipeline: ResponsePipeline
   private let detector = CommandDetector()
-  private let spokenSummarizer = SpokenResponseSummarizer()
+  private let spokenSummarizer: SpokenResponseSummarizer
   private var config: AppConfig
   private let logger = MiddleAILogger()
+  private let requestCoordinator = AssistantRequestCoordinator()
   private var activeRequest: Task<String, Error>?
   private var activeRequestID: UUID?
   private var activeChatID: String?
@@ -29,9 +30,27 @@ public enum InputResult: Sendable, Equatable {
     self.config = config
     self.activeProfile = config.activeProfile
     self.pipeline = ResponsePipeline(queue: ttsQueue, mode: config.spokenResponseMode)
+    self.spokenSummarizer = SpokenResponseSummarizer(localLLM: config.localLLM)
   }
   public func handle(text: String, source: String = "unknown") async throws -> InputResult {
-    cancelActiveRequest()
+    if detector.detect(text) == .stop {
+      interrupt()
+      logger.event("command_detected")
+      return try handle(.stop)
+    }
+    let coordinatedRequestID = UUID()
+    try await requestCoordinator.acquire(coordinatedRequestID)
+    do {
+      let result = try await performHandle(text: text, source: source)
+      requestCoordinator.release(coordinatedRequestID)
+      return result
+    } catch {
+      requestCoordinator.release(coordinatedRequestID)
+      throw error
+    }
+  }
+
+  private func performHandle(text: String, source: String) async throws -> InputResult {
     pipeline.interrupt()
     logger.event("input_received", metadata: ["source": source, "length": "\(text.count)"])
     if let command = detector.detect(text) {
@@ -60,7 +79,9 @@ public enum InputResult: Sendable, Equatable {
       conversation = try manager.create(title: Self.title(from: text), profile: activeProfile)
     }
     let storedMessages = try manager.messages(for: conversation.id)
-    let messages = Self.removingUnansweredUserSuffix(from: storedMessages)
+    let messages = Self.boundedContext(
+      Self.removingUnansweredUserSuffix(from: storedMessages),
+      maximumCharacters: config.activeContextBudgetCharacters)
     let userMessage = Message(role: .user, content: text)
     var requestMessages = messages + [userMessage]
     let profilePrompt = config.profileSystemPrompt(for: activeProfile)
@@ -81,15 +102,17 @@ public enum InputResult: Sendable, Equatable {
     }
     let requestStarted = Date()
     logger.event("assistant_request_started", metadata: ["provider": config.assistant.provider])
-    let requestID = UUID()
-    activeRequestID = requestID
+    let providerRequestID = UUID()
+    activeRequestID = providerRequestID
     activeChatID = chatID
     let (tokens, tokenContinuation) = AsyncStream<String>.makeStream()
-    let tokenDelivery = Task { @MainActor [weak self] in
+    let tokenDelivery = Task { @MainActor [weak self] () -> String in
       var first = true
+      var streamedResponse = ""
       for await token in tokens {
-        guard let self else { return }
-        guard self.activeRequestID == requestID else { return }
+        guard let self else { return streamedResponse }
+        guard self.activeRequestID == providerRequestID else { return streamedResponse }
+        streamedResponse += token
         if first {
           first = false
           self.logger.event(
@@ -100,6 +123,7 @@ public enum InputResult: Sendable, Equatable {
         }
         self.pipeline.receive(token)
       }
+      return streamedResponse
     }
     let response: String
     let client = client
@@ -109,9 +133,9 @@ public enum InputResult: Sendable, Equatable {
       }
     }
     activeRequest = requestTask
-    activeRequestID = requestID
+    activeRequestID = providerRequestID
     defer {
-      if activeRequestID == requestID {
+      if activeRequestID == providerRequestID {
         activeRequest = nil
         activeRequestID = nil
         activeChatID = nil
@@ -124,17 +148,24 @@ public enum InputResult: Sendable, Equatable {
         requestTask.cancel()
       }
       tokenContinuation.finish()
-      await tokenDelivery.value
+      let streamedResponse = await tokenDelivery.value
+      if streamedResponse != response {
+        // A provider may rewrite a research preamble or an outlet filter may replace the draft.
+        // Reset buffered/spoken draft state so the canonical final answer wins deterministically.
+        pipeline.interrupt()
+        pipeline.receive(response)
+      }
     } catch {
       tokenContinuation.finish()
       tokenDelivery.cancel()
       if requestTask.isCancelled || Task.isCancelled
         || (error as? URLError)?.code == .cancelled
       {
-        if activeRequestID == requestID { pipeline.interrupt() }
+        if activeRequestID == providerRequestID { pipeline.interrupt() }
         logger.event("assistant_request_cancelled")
         throw CancellationError()
       }
+      if activeRequestID == providerRequestID { pipeline.interrupt() }
       ttsQueue.enqueue("Der ausgewählte KI-Anbieter ist momentan nicht erreichbar.")
       logger.error("assistant_request_failed_\(config.assistant.provider)")
       throw error
@@ -149,12 +180,11 @@ public enum InputResult: Sendable, Equatable {
       if !spoken.isEmpty { ttsQueue.enqueue(spoken) }
     }
     let assistantMessage = Message(role: .assistant, content: response)
-    try manager.add(userMessage, to: conversation.id)
-    try manager.add(assistantMessage, to: conversation.id)
     conversation.lastUsedAt = Date()
     conversation.summary = Self.summary(
       messages: messages + [userMessage, assistantMessage])
-    try manager.update(conversation)
+    try manager.saveExchange(
+      user: userMessage, assistant: assistantMessage, conversation: conversation)
     logger.event(
       "response_completed",
       metadata: [
@@ -236,62 +266,104 @@ public enum InputResult: Sendable, Equatable {
     while result.last?.role == .user { result.removeLast() }
     return result
   }
+
+  nonisolated public static func boundedContext(
+    _ messages: [Message], maximumCharacters: Int
+  ) -> [Message] {
+    let limit = max(1, maximumCharacters)
+    var selected: [Message] = []
+    var remaining = limit
+    for message in messages.reversed() {
+      if message.content.count <= remaining {
+        selected.append(message)
+        remaining -= message.content.count
+      } else if selected.isEmpty {
+        var truncated = message
+        truncated.content = "…" + String(message.content.suffix(max(0, remaining - 1)))
+        selected.append(truncated)
+        remaining = 0
+      } else {
+        break
+      }
+      if remaining == 0 { break }
+    }
+    return selected.reversed()
+  }
 }
 
 public enum MiddleAIFactory {
   @MainActor public static func make(
-    config: AppConfig, credentials: any CredentialStore = CompositeCredentialStore()
+    config sourceConfig: AppConfig, credentials: any CredentialStore = CompositeCredentialStore(),
+    conversationStore: (any ConversationStoreProtocol)? = nil
   ) throws -> MiddleAIEngine {
+    let config = sourceConfig.resolved()
     let directory = ConfigLoader.defaultDirectory
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let store = try SQLiteConversationStore(
-      path: directory.appendingPathComponent("middleai.sqlite").path)
+    let store: any ConversationStoreProtocol
+    if let conversationStore {
+      store = conversationStore
+    } else {
+      store = try SQLiteConversationStore(
+        path: directory.appendingPathComponent("middleai.sqlite").path)
+    }
     let heuristic = HeuristicRouter(continuationTimeout: config.routing.continuationTimeoutSeconds)
     var llm: (any ConversationRoutingStrategy)?
     if config.localLLM.enabled {
       if config.localLLM.provider == "apple" {
         llm = AppleIntelligenceRouter()
       } else if let url = URL(string: config.localLLM.url) {
-        llm = LLMRouter(endpoint: url, model: config.localLLM.model)
+        llm = LLMRouter(
+          endpoint: url, model: config.localLLM.model, timeout: config.localLLM.timeoutSeconds,
+          circuitBreakerFailures: config.localLLM.circuitBreakerFailures,
+          circuitBreakerCooldown: config.localLLM.circuitBreakerCooldownSeconds)
       }
     }
     let router: any ConversationRoutingStrategy =
       config.routing.strategy == "heuristic"
-      ? heuristic : HybridRouter(heuristic: heuristic, llm: llm)
+      ? heuristic
+      : HybridRouter(
+        heuristic: heuristic, llm: llm,
+        confidenceContinue: config.routing.confidenceContinue)
     let manager = ConversationManager(
       store: store, router: router, confidenceAsk: config.routing.confidenceAsk)
     let client = try makeAssistantClient(config: config, credentials: credentials)
     TTSOutputDevicePreference.uid = config.tts.outputDeviceUID
-    let native = MacOSTTSProvider(voice: config.tts.voice, rate: config.tts.rate)
+    let ttsOptions = TTSLocalOptions(
+      pronunciations: config.tts.pronunciationDictionary,
+      cacheMaximumBytes: config.tts.cacheEnabled
+        ? Int64(config.tts.cacheMaximumMegabytes) * 1_048_576 : 0)
+    let native = MacOSTTSProvider(
+      voice: config.tts.voice, rate: config.tts.rate, options: ttsOptions)
     let provider: any TTSProvider
     switch config.tts.provider {
     case "qwen3_tts":
       provider = FallbackTTSProvider(
         primary: VoxtralTTSProvider.qwen(
-          voice: config.tts.voice, rate: config.tts.rate),
-        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate))
+          voice: config.tts.voice, rate: config.tts.rate, options: ttsOptions),
+        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate, options: ttsOptions))
     case "voxtral_tts":
       provider = FallbackTTSProvider(
-        primary: VoxtralTTSProvider(voice: config.tts.voice),
-        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate))
+        primary: VoxtralTTSProvider(voice: config.tts.voice, options: ttsOptions),
+        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate, options: ttsOptions))
     case "adaptive":
       provider = AdaptiveGermanTTSProvider(
         natural: Supertonic3TTSProvider(
           voice: "F1", rate: config.tts.rate,
-          highQuality: config.tts.quality != "fast"),
-        precise: MacOSTTSProvider(voice: config.tts.voice, rate: config.tts.rate))
+          highQuality: config.tts.quality != "fast", options: ttsOptions),
+        precise: MacOSTTSProvider(
+          voice: config.tts.voice, rate: config.tts.rate, options: ttsOptions))
     case "supertonic3":
       provider = FallbackTTSProvider(
         primary: Supertonic3TTSProvider(
           voice: config.tts.voice, rate: config.tts.rate,
-          highQuality: config.tts.quality != "fast"),
-        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate))
+          highQuality: config.tts.quality != "fast", options: ttsOptions),
+        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate, options: ttsOptions))
     case "pockettts":
       provider = FallbackTTSProvider(
         primary: PocketTTSProvider(
           voice: config.tts.voice, highQuality: config.tts.quality != "fast",
-          temperature: config.tts.temperature),
-        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate))
+          temperature: config.tts.temperature, options: ttsOptions),
+        fallback: MacOSTTSProvider(voice: "", rate: config.tts.rate, options: ttsOptions))
     case "local_model":
       provider = FallbackTTSProvider(
         primary: LocalModelTTSProvider(executable: config.tts.localCommand), fallback: native)
@@ -308,9 +380,13 @@ public enum MiddleAIFactory {
   ) throws -> any AssistantClientProtocol {
     switch config.assistant.provider {
     case "openai":
-      return HostedAIClient(provider: .openai, credentials: credentials)
+      return HostedAIClient(
+        provider: .openai, credentials: credentials,
+        contextTokenBudget: config.openai.contextTokenBudget)
     case "openrouter":
-      return HostedAIClient(provider: .openrouter, credentials: credentials)
+      return HostedAIClient(
+        provider: .openrouter, credentials: credentials,
+        contextTokenBudget: config.openrouter.contextTokenBudget)
     default:
       guard let url = URL(string: config.openwebui.url) else {
         throw MiddleAIError.configuration("Invalid Open WebUI URL")

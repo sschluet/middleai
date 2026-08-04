@@ -1,4 +1,5 @@
 import AppKit
+import FluidAudio
 import MiddleAICore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -19,27 +20,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   ) -> Bool {
     NotificationCenter.default.post(name: .middleAIReopen, object: nil)
     return true
-  }
-}
-
-private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
-  private let base: any CredentialStore
-  private let lock = NSLock()
-  private var overrides: [String: String]
-
-  init(base: any CredentialStore, account: String, value: String) {
-    self.base = base
-    self.overrides = [account: value]
-  }
-  func save(_ value: String, account: String) throws {
-    lock.withLock { overrides[account] = value }
-  }
-  func read(account: String) throws -> String? {
-    if let value = lock.withLock({ overrides[account] }) { return value }
-    return try base.read(account: account)
-  }
-  func delete(account: String) throws {
-    lock.withLock { _ = overrides.removeValue(forKey: account) }
   }
 }
 
@@ -78,6 +58,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   @Published var localCacheStatus = "Lokaler Cache wird geprüft"
   @Published var diagnosticChecks: [DiagnosticCheck] = []
   @Published var diagnosticsRunning = false
+  @Published var isPrivateSession = false
   let credentials = CompositeCredentialStore()
   private(set) var engine: MiddleAIEngine?
   private var server: LocalInputServer?
@@ -87,6 +68,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   private var voiceController: VoiceInputController?
   private var ttsPreviewTask: Task<Void, Never>?
   private var ttsDownloadMonitorTask: Task<Void, Never>?
+  private let ttsModelStatusScanner = TTSModelStatusScanner()
   private var microphoneTestTask: Task<Void, Never>?
   private var microphoneTestRecorder: MicrophoneRecorder?
   private var confirmedTTSModels = Set<String>()
@@ -94,6 +76,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   private var reopenObserver: NSObjectProtocol?
   private var menuBarController: MenuBarController?
   private var builtAssistantProvider = ""
+  private var ephemeralStore: InMemoryConversationStore?
   init() {
     reopenObserver = NotificationCenter.default.addObserver(
       forName: .middleAIReopen, object: nil, queue: .main
@@ -143,7 +126,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   private func configureVoice() {
     voiceController = VoiceInputController(
       engineProvider: { [weak self] in self?.engine },
-      configProvider: { [weak self] in self?.config ?? AppConfig() },
+      configProvider: { [weak self] in self?.config.resolved() ?? AppConfig() },
       onStatus: { [weak self] message in self?.voiceStatus = message },
       onStarted: { [weak self] in
         self?.responseText = ""
@@ -168,25 +151,41 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     }
   }
   var currentTitle: String {
-    engine?.manager.currentConversation?.title ?? "No active conversation"
+    let title = engine?.manager.currentConversation?.title ?? "No active conversation"
+    return isPrivateSession ? "Privat · \(title)" : title
   }
   func rebuild() throws {
+    let effectiveConfig = config.resolved()
     let providerChanged =
       !builtAssistantProvider.isEmpty
-      && builtAssistantProvider != config.assistant.provider
+      && builtAssistantProvider != effectiveConfig.assistant.provider
     server?.stop()
+    engine?.interrupt()
     engine?.ttsQueue.stop()
-    engine = try MiddleAIFactory.make(config: config, credentials: credentials)
-    builtAssistantProvider = config.assistant.provider
+    let selectedStore: (any ConversationStoreProtocol)?
+    if isPrivateSession {
+      if ephemeralStore == nil { ephemeralStore = InMemoryConversationStore() }
+      selectedStore = ephemeralStore
+    } else {
+      selectedStore = nil
+    }
+    engine = try MiddleAIFactory.make(
+      config: config, credentials: credentials, conversationStore: selectedStore)
+    engine?.ttsQueue.onError = { [weak self] message in
+      self?.ttsStatus = "Sprachausgabe fehlgeschlagen: \(String(message.prefix(170)))"
+      self?.lastError = message
+    }
+    builtAssistantProvider = effectiveConfig.assistant.provider
     if providerChanged {
       _ = try engine?.manager.create(
-        title: "Neue Unterhaltung", profile: config.activeProfile)
+        title: "Neue Unterhaltung", profile: effectiveConfig.activeProfile)
       responseText = ""
       refreshConversations()
     }
   }
   func connectAndServe() async {
     guard let engine else { return }
+    let effectiveConfig = config.resolved()
     status = "Connecting"
     do {
       server?.stop()
@@ -199,15 +198,16 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
       try server?.start()
       try await engine.client.authenticate()
       let availableModels = try await engine.client.models()
-      let selectedModel = config.assistantModel.trimmingCharacters(in: .whitespacesAndNewlines)
+      let selectedModel = effectiveConfig.assistantModel.trimmingCharacters(
+        in: .whitespacesAndNewlines)
       guard availableModels.contains(selectedModel) else {
         throw MiddleAIError.configuration(
-          "Die Modell-ID „\(selectedModel)“ ist bei \(config.assistantProviderTitle) nicht verfügbar."
+          "Die Modell-ID „\(selectedModel)“ ist bei \(effectiveConfig.assistantProviderTitle) nicht verfügbar."
         )
       }
       providerModels = availableModels
       providerModelStatus =
-        "\(availableModels.count) Modelle von \(config.assistantProviderTitle) geladen"
+        "\(availableModels.count) Modelle von \(effectiveConfig.assistantProviderTitle) geladen"
       status = "Connected"
       lastError = ""
     } catch {
@@ -256,9 +256,8 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
       responseText = answer
     }
     if let activeProfile = engine?.activeProfile, config.activeProfile != activeProfile {
-      config.activeProfile = activeProfile
-      try? ConfigLoader.save(config)
-      profileStatus = "Profil \(Self.profileTitle(activeProfile)) ist aktiv"
+      activateProfileConfiguration(
+        activeProfile, announceInResponse: false, cancelCurrentInteraction: false)
     }
     refreshConversations()
   }
@@ -282,25 +281,70 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   }
 
   func selectProfile(_ profile: String) {
-    guard AppConfig.supportedProfileIDs.contains(profile), let engine else { return }
+    guard AppConfig.supportedProfileIDs.contains(profile) else { return }
+    activateProfileConfiguration(profile, announceInResponse: true)
+  }
+
+  private func activateProfileConfiguration(
+    _ profile: String, announceInResponse: Bool, cancelCurrentInteraction: Bool = true
+  ) {
+    if cancelCurrentInteraction { voiceController?.cancelCurrentInteraction() }
     config.activeProfile = profile
-    engine.activateProfile(profile)
     do {
       try ConfigLoader.save(config)
-      responseText = "Profil \(Self.profileTitle(profile)) ist aktiv."
+      try rebuild()
+      if engine?.manager.currentConversation?.profile != profile {
+        _ = try engine?.manager.create(title: "Neue Unterhaltung", profile: profile)
+      }
+      if announceInResponse { responseText = "Profil \(Self.profileTitle(profile)) ist aktiv." }
       profileStatus = "Profil \(Self.profileTitle(profile)) ist aktiv"
-      objectWillChange.send()
+      refreshConversations()
+      prepareTTSModel()
+      Task { await connectAndServe() }
     } catch {
       lastError = error.localizedDescription
       profileStatus = "Profil konnte nicht gespeichert werden"
     }
   }
 
+  func setPrivateSession(_ enabled: Bool) {
+    guard enabled != isPrivateSession else { return }
+    voiceController?.cancelCurrentInteraction()
+    isPrivateSession = enabled
+    if enabled {
+      ephemeralStore = InMemoryConversationStore()
+    } else {
+      ephemeralStore = nil
+    }
+    responseText = ""
+    input = ""
+    do {
+      try rebuild()
+      refreshConversations()
+      voiceStatus =
+        enabled
+        ? "Private Sitzung aktiv · Verlauf bleibt nur im Arbeitsspeicher"
+        : "Private Sitzung beendet · temporärer Verlauf wurde verworfen"
+      Task { await connectAndServe() }
+    } catch {
+      isPrivateSession.toggle()
+      if !isPrivateSession { ephemeralStore = nil }
+      lastError = error.localizedDescription
+    }
+  }
+
   func saveProfileSettings() {
     do {
+      let previousConversationID = engine?.manager.currentConversation?.id
       try ConfigLoader.save(config)
       try rebuild()
+      if engine?.manager.currentConversation?.id == previousConversationID {
+        _ = try engine?.manager.create(
+          title: "Neue Unterhaltung", profile: config.activeProfile)
+      }
       profileStatus = "Profile und System-Prompts wurden gespeichert"
+      refreshConversations()
+      prepareTTSModel()
       Task { await connectAndServe() }
     } catch {
       lastError = error.localizedDescription
@@ -318,26 +362,43 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     }
   }
   func refreshConversations() {
-    do {
-      conversations = try engine?.manager.list() ?? []
-      if let statistics = try engine?.manager.cacheStatistics() {
-        localCacheStatus =
-          "\(statistics.conversations) Unterhaltungen · \(statistics.messages) Nachrichten"
-      } else {
-        localCacheStatus = "Lokaler Cache ist leer"
+    guard let manager = engine?.manager else {
+      conversations = []
+      localCacheStatus = "Lokaler Cache ist leer"
+      return
+    }
+    Task { [weak self] in
+      let result = await Task.detached(priority: .utility) {
+        try (manager.list(), manager.cacheStatistics())
+      }.result
+      guard let self else { return }
+      switch result {
+      case .success(let (items, statistics)):
+        self.conversations = items
+        self.localCacheStatus =
+          self.isPrivateSession
+          ? "Private Sitzung · \(statistics.conversations) Unterhaltungen im Arbeitsspeicher"
+          : "\(statistics.conversations) Unterhaltungen · \(statistics.messages) Nachrichten"
+      case .failure(let error): self.lastError = error.localizedDescription
       }
-    } catch { lastError = error.localizedDescription }
+    }
   }
   func purgeLocalHistory(olderThanDays days: Int) {
     guard let engine else { return }
-    do {
-      let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-      try engine.manager.purgeLocalHistory(olderThan: cutoff)
-      responseText = ""
-      refreshConversations()
-      voiceStatus = "Lokaler Cache wurde bereinigt"
-    } catch {
-      lastError = error.localizedDescription
+    let manager = engine.manager
+    let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+    Task { [weak self] in
+      let result = await Task.detached(priority: .utility) {
+        try manager.purgeLocalHistory(olderThan: cutoff)
+      }.result
+      guard let self else { return }
+      switch result {
+      case .success:
+        self.responseText = ""
+        self.refreshConversations()
+        self.voiceStatus = "Lokaler Cache wurde bereinigt"
+      case .failure(let error): self.lastError = error.localizedDescription
+      }
     }
   }
   func savePrivacySettings() {
@@ -359,14 +420,25 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
   }
   func clearLocalHistory() {
     guard let engine else { return }
-    do {
-      try engine.manager.clearLocalHistory()
-      conversations = []
-      responseText = ""
-      localCacheStatus = "Lokaler Cache ist leer"
-      voiceStatus = "Lokaler MiddleAI-Cache wurde gelöscht"
-    } catch {
-      lastError = error.localizedDescription
+    let manager = engine.manager
+    Task { [weak self] in
+      let result = await Task.detached(priority: .utility) {
+        try manager.clearLocalHistory()
+      }.result
+      guard let self else { return }
+      switch result {
+      case .success:
+        self.conversations = []
+        self.responseText = ""
+        self.localCacheStatus =
+          self.isPrivateSession
+          ? "Private Sitzung ist leer" : "Lokaler Cache ist leer"
+        self.voiceStatus =
+          self.isPrivateSession
+          ? "Temporärer Sitzungsverlauf wurde verworfen"
+          : "Lokaler MiddleAI-Cache wurde gelöscht"
+      case .failure(let error): self.lastError = error.localizedDescription
+      }
     }
   }
   func runDiagnostics() {
@@ -380,52 +452,101 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     }
   }
 
+  var offlineReadinessItems: [OfflineReadinessItem] {
+    let effective = config.resolved()
+    let sttPrecision: ParakeetEncoderPrecision =
+      effective.stt.encoderPrecision == "int4" ? .int4 : .int8
+    let sttReady = AsrModels.modelsExist(
+      at: AsrModels.defaultCacheDirectory(for: .v3), version: .v3,
+      encoderPrecision: sttPrecision)
+    let ttsModelID = TTSModelLibrary.modelID(for: effective.tts.provider)
+    let ttsModel = ttsModelStatuses.first { $0.id == ttsModelID }
+    let ttsReady =
+      ttsModelID == nil
+      || ttsModel?.phase == .installed || ttsModel?.phase == .updateAvailable
+    let intelligence: OfflineReadinessItem
+    if !effective.localLLM.enabled {
+      intelligence = OfflineReadinessItem(
+        title: "Chat-Routing", state: .ready,
+        detail: "Die eingebauten Regeln und die lokale Ähnlichkeit sind offline bereit.")
+    } else if effective.localLLM.provider == "apple" {
+      let availability = DictationPolisher.availabilityDescription
+      let available =
+        availability.localizedCaseInsensitiveContains("verfügbar")
+        && !availability.localizedCaseInsensitiveContains("nicht verfügbar")
+      intelligence = OfflineReadinessItem(
+        title: "Lokale Intelligenz", state: available ? .ready : .needsService,
+        detail: available
+          ? "Apple Intelligence ist lokal verfügbar."
+          : "Apple Intelligence muss in macOS verfügbar und aktiviert sein.")
+    } else {
+      intelligence = OfflineReadinessItem(
+        title: "Lokale Intelligenz", state: .needsService,
+        detail:
+          "\(effective.localLLM.provider == "llama_cpp" ? "llama.cpp" : "Ollama") muss lokal laufen und das konfigurierte Modell geladen haben."
+      )
+    }
+    let provider: OfflineReadinessItem
+    if effective.assistant.provider == "openwebui",
+      let host = URL(string: effective.openwebui.url)?.host?.lowercased(),
+      ["localhost", "127.0.0.1", "::1"].contains(host)
+    {
+      provider = OfflineReadinessItem(
+        title: "Antwortanbieter", state: .needsService,
+        detail:
+          "Der lokale OpenWebUI-Dienst muss laufen; eine Internetverbindung ist dafür nicht erforderlich."
+      )
+    } else {
+      provider = OfflineReadinessItem(
+        title: "Antwortanbieter", state: .requiresNetwork,
+        detail:
+          "\(effective.assistantProviderTitle) benötigt für Antworten eine Netzwerkverbindung.")
+    }
+    return [
+      OfflineReadinessItem(
+        title: "Spracheingabe", state: sttReady ? .ready : .needsDownload,
+        detail: sttReady
+          ? "Parakeet STT ist lokal vollständig vorhanden."
+          : "Die ausgewählte Parakeet-Encoderstufe muss noch vollständig geladen werden."),
+      OfflineReadinessItem(
+        title: "Sprachausgabe", state: ttsReady ? .ready : .needsDownload,
+        detail: ttsReady
+          ? "Die ausgewählte Stimme ist lokal verfügbar."
+          : "Das ausgewählte TTS-Modell muss noch vollständig geladen und geprüft werden."),
+      intelligence,
+      provider,
+    ]
+  }
+
   func exportDiagnostics() {
     let panel = NSSavePanel()
-    panel.nameFieldStringValue = "MiddleAI-Diagnose.txt"
+    panel.nameFieldStringValue = "MiddleAI-Supportbericht.txt"
     panel.allowedContentTypes = [.plainText]
     guard panel.runModal() == .OK, let destination = panel.url else { return }
     let appVersion =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "development"
-    let modelLines = ttsModelStatuses.map {
-      "- \($0.title): \($0.phase) · \($0.downloadedSize)"
-    }.joined(separator: "\n")
-    let checkLines = diagnosticChecks.map {
-      "- \($0.passed ? "OK" : "FEHLER") \($0.name)"
-        + ($0.detail.map { ": \(Self.redactedDiagnosticDetail($0))" } ?? "")
-    }.joined(separator: "\n")
-    let report = """
-      MiddleAI Diagnose
-      Version: \(appVersion)
-      macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)
-      Architektur: \(ProcessInfo.processInfo.machineHardwareName)
-      TTS-Provider: \(config.tts.provider)
-      Antwortanbieter: \(config.assistantProviderTitle)
-
-      Prüfungen:
-      \(checkLines.isEmpty ? "- Noch nicht ausgeführt" : checkLines)
-
-      Lokale TTS-Modelle:
-      \(modelLines)
-
-      Datenschutz: Benutzername, Zugangsdaten, Prompts und Antworten sind nicht enthalten.
-      """
-    do {
-      try report.write(to: destination, atomically: true, encoding: .utf8)
-    } catch {
-      lastError = error.localizedDescription
+    let environment = SupportBundleEnvironment(
+      appVersion: appVersion, operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+      architecture: ProcessInfo.processInfo.machineHardwareName,
+      assistantProvider: config.resolved().assistantProviderTitle,
+      ttsProvider: config.resolved().tts.provider, activeProfile: config.activeProfile,
+      privateSession: isPrivateSession)
+    let checks = diagnosticChecks
+    let models = ttsModelStatuses.map {
+      (name: $0.title, state: String(describing: $0.phase), size: $0.downloadedSize)
     }
-  }
-
-  private static func redactedDiagnosticDetail(_ detail: String) -> String {
-    var sanitized = detail
-    if let expression = try? NSRegularExpression(pattern: #"https?://[^\s]+"#) {
-      sanitized = expression.stringByReplacingMatches(
-        in: sanitized, range: NSRange(sanitized.startIndex..., in: sanitized),
-        withTemplate: "[Server ausgeblendet]")
+    Task.detached(priority: .utility) { [weak self] in
+      do {
+        let report = SupportBundleBuilder.report(
+          environment: environment, checks: checks, localModelStates: models)
+        try report.write(to: destination, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+          [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: destination.path)
+      } catch {
+        await MainActor.run { self?.lastError = error.localizedDescription }
+      }
     }
-    return String(sanitized.prefix(300))
   }
   func activateConversation(_ conversation: Conversation) {
     guard let engine else { return }
@@ -464,7 +585,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
         trialCredentials = credentials
       } else {
         trialCredentials = TrialCredentialStore(
-          base: credentials, account: credentialAccountForSelectedProvider, value: secret)
+          base: credentials, accounts: trialCredentialAccounts, value: secret)
       }
       let trialClient = try MiddleAIFactory.makeAssistantClient(
         config: config, credentials: trialCredentials)
@@ -497,7 +618,9 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     case "openrouter":
       try credentials.save(secret, account: HostedAIProvider.openrouter.credentialAccount)
     default:
-      try credentials.save(secret, account: "password")
+      let scoped = ScopedCredentialStore(
+        base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
+      try scoped.save(secret, account: credentialAccountForSelectedProvider)
     }
   }
 
@@ -505,8 +628,16 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     switch config.assistant.provider {
     case "openai": return HostedAIProvider.openai.credentialAccount
     case "openrouter": return HostedAIProvider.openrouter.credentialAccount
-    default: return "password"
+    default: return config.openwebui.authMethod == "api_key" ? "api_token" : "password"
     }
+  }
+
+  private var trialCredentialAccounts: [String] {
+    let account = credentialAccountForSelectedProvider
+    guard config.assistant.provider == "openwebui" else { return [account] }
+    let scoped = ScopedCredentialStore(
+      base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
+    return [account, scoped.scopedAccount(for: account)]
   }
 
   private static func suggestedModel(for provider: String, models: [String]) -> String? {
@@ -589,11 +720,11 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     isTestingMicrophone = true
     microphoneTestStatus = "Bitte jetzt kurz sprechen …"
     do {
-      try recorder.start(deviceUID: config.stt.inputDeviceUID) { [weak self] level in
-        Task { @MainActor in
-          self?.microphoneTestLevel = Double(level)
-        }
-      }
+      try recorder.start(
+        deviceUID: config.stt.inputDeviceUID, maximumDuration: 3,
+        onLevel: { [weak self] level in
+          Task { @MainActor in self?.microphoneTestLevel = Double(level) }
+        })
     } catch {
       microphoneTestRecorder = nil
       isTestingMicrophone = false
@@ -698,6 +829,17 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
       lastError = error.localizedDescription
     }
   }
+  func clearTTSAudioCache() {
+    Task { [weak self] in
+      do {
+        try await TTSAudioCache.shared.clear()
+        self?.ttsStatus = "Der lokale TTS-Cache wurde geleert"
+      } catch {
+        self?.ttsStatus = "Der lokale TTS-Cache konnte nicht geleert werden"
+        self?.lastError = error.localizedDescription
+      }
+    }
+  }
   private var ttsProviderName: String {
     switch config.tts.provider {
     case "qwen3_tts": return "Qwen3-TTS Deutsch"
@@ -738,15 +880,15 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     startTTSPreparation(using: engine, preview: false)
   }
 
-  func refreshTTSModelStatuses() {
+  func refreshTTSModelStatuses(force: Bool = false) {
     let activeModelID = ttsPreparingModelID
     let confirmed = confirmedTTSModels
     let failures = ttsModelFailures
     Task { [weak self] in
-      let statuses = await Task.detached(priority: .utility) {
-        TTSModelLibrary.scan(
-          activeModelID: activeModelID, confirmed: confirmed, failures: failures)
-      }.value
+      let statuses =
+        await self?.ttsModelStatusScanner.statuses(
+          activeModelID: activeModelID, confirmed: confirmed, failures: failures, force: force)
+        ?? []
       guard let self else { return }
       self.ttsModelStatuses = statuses
     }
@@ -757,14 +899,13 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
       ttsStatus = "Ein laufender Modelldownload kann nicht gelöscht werden"
       return
     }
-    let paths =
-      model.phase == .updateAvailable
-      ? TTSModelLibrary.deletablePaths(for: model.id).filter {
-        FileManager.default.fileExists(atPath: $0.path)
-      } : []
-    guard !paths.isEmpty else {
+    let paths = TTSModelLibrary.deletablePaths(for: model.id).filter {
+      FileManager.default.fileExists(atPath: $0.path)
+    }
+    let hadMetadata = model.phase != .notDownloaded
+    guard !paths.isEmpty || hadMetadata else {
       ttsStatus = "Für \(model.title) wurden keine Modelldaten gefunden"
-      refreshTTSModelStatuses()
+      refreshTTSModelStatuses(force: true)
       return
     }
     engine?.ttsQueue.stop()
@@ -779,6 +920,12 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
       try? rebuild()
       Task { [weak self] in await self?.connectAndServe() }
     }
+    guard !paths.isEmpty else {
+      ttsStatus = "Unvollständige Installation von \(model.title) wurde entfernt"
+      Task { await ttsModelStatusScanner.invalidate() }
+      refreshTTSModelStatuses(force: true)
+      return
+    }
     ttsStatus = "\(model.title) wird in den Papierkorb verschoben …"
     NSWorkspace.shared.recycle(paths) { [weak self] _, error in
       Task { @MainActor in
@@ -789,7 +936,8 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
         } else {
           self.ttsStatus = "\(model.title) wurde in den Papierkorb verschoben"
         }
-        self.refreshTTSModelStatuses()
+        await self.ttsModelStatusScanner.invalidate()
+        self.refreshTTSModelStatuses(force: true)
       }
     }
   }
@@ -890,7 +1038,7 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     refreshTTSModelStatuses()
     ttsDownloadMonitorTask = Task { [weak self] in
       while !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(800))
+        try? await Task.sleep(for: .milliseconds(1_200))
         guard !Task.isCancelled else { return }
         self?.refreshTTSModelStatuses()
       }
@@ -902,7 +1050,8 @@ private final class TrialCredentialStore: CredentialStore, @unchecked Sendable {
     ttsPreparingModelID = nil
     ttsDownloadMonitorTask?.cancel()
     ttsDownloadMonitorTask = nil
-    refreshTTSModelStatuses()
+    Task { await ttsModelStatusScanner.invalidate() }
+    refreshTTSModelStatuses(force: true)
   }
   func testTTS() {
     guard let engine else { return }
