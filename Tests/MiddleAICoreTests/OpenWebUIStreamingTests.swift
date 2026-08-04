@@ -58,9 +58,11 @@ final class OpenWebUIStreamingTests: XCTestCase {
               + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"
               + "data: [DONE]\n\n").utf8)
         )
-      case "/api/v1/chats/test-chat":
+      case "/api/v1/chats/test-chat" where request.httpMethod == "GET":
         XCTFail("A terminal length result must not be converted into polling")
         return (500, Data())
+      case "/api/v1/chats/test-chat":
+        return (200, Data("{}".utf8))
       default:
         return (404, Data())
       }
