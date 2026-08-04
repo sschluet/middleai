@@ -536,16 +536,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     let models = ttsModelStatuses.map {
       (name: $0.title, state: String(describing: $0.phase), size: $0.downloadedSize)
     }
-    Task.detached(priority: .utility) { [weak self] in
-      do {
-        let report = SupportBundleBuilder.report(
-          environment: environment, checks: checks, localModelStates: models)
-        try report.write(to: destination, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-          [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: destination.path)
-      } catch {
-        await MainActor.run { self?.lastError = error.localizedDescription }
-      }
+    Task { [weak self] in
+      let failure = await Task.detached(priority: .utility) { () -> String? in
+        do {
+          let report = SupportBundleBuilder.report(
+            environment: environment, checks: checks, localModelStates: models)
+          try report.write(to: destination, atomically: true, encoding: .utf8)
+          try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: destination.path)
+          return nil
+        } catch {
+          return error.localizedDescription
+        }
+      }.value
+      if let failure { self?.lastError = failure }
     }
   }
   func activateConversation(_ conversation: Conversation) {
