@@ -115,8 +115,8 @@ final class MiddleAICoreTests: XCTestCase {
         assistantProvider: "OpenWebUI", ttsProvider: "macOS", activeProfile: "default",
         privateSession: true),
       checks: [
-        DiagnosticCheck(name: "Verbindung", passed: false, detail: "https://secret.example/user"),
-        DiagnosticCheck(name: "Dateirechte", passed: true, detail: "600; erwartet 600"),
+        DiagnosticCheck("Verbindung", false, "https://secret.example/user"),
+        DiagnosticCheck("Dateirechte", true, "600; erwartet 600"),
       ],
       localModelStates: [(name: "TTS", state: "bereit", size: "1 GB")])
 
