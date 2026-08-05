@@ -76,18 +76,17 @@ final class MenuBarController: NSObject {
     menu.addItem(.separator())
 
     menu.addItem(actionItem("MiddleAI öffnen…", action: #selector(showQuickInput)))
-    menu.addItem(actionItem("Setup / Settings…", action: #selector(showSetup)))
+    menu.addItem(actionItem("Einstellungen…", action: #selector(showSetup)))
     menu.addItem(actionItem("Hilfe & Systemanforderungen…", action: #selector(showHelp)))
-    menu.addItem(actionItem("New Conversation", action: #selector(startNewConversation)))
-    menu.addItem(actionItem("Stop Speaking", action: #selector(stopSpeaking)))
+    menu.addItem(actionItem("Neue Unterhaltung", action: #selector(startNewConversation)))
+    menu.addItem(actionItem("Sprachausgabe stoppen", action: #selector(stopSpeaking)))
 
     let providerItem = actionItem(
       "Anbieter-Seite öffnen", action: #selector(openProviderPage))
     providerItem.isEnabled = state?.engine?.manager.currentConversation?.openWebUIChatID != nil
     menu.addItem(providerItem)
     menu.addItem(.separator())
-    menu.addItem(actionItem("Settings", action: #selector(showSetup)))
-    menu.addItem(actionItem("Diagnostics", action: #selector(runDiagnostics)))
+    menu.addItem(actionItem("Diagnose…", action: #selector(showDiagnostics)))
 
     if let error = state?.lastError, !error.isEmpty {
       let item = informationalItem(error)
@@ -97,7 +96,7 @@ final class MenuBarController: NSObject {
     }
 
     menu.addItem(.separator())
-    menu.addItem(actionItem("Quit MiddleAI", action: #selector(quit)))
+    menu.addItem(actionItem("MiddleAI beenden", action: #selector(quit)))
     return menu
   }
 
@@ -120,7 +119,7 @@ final class MenuBarController: NSObject {
   @objc private func startNewConversation() { state?.startNewConversation() }
   @objc private func stopSpeaking() { state?.stopSpeaking() }
   @objc private func openProviderPage() { state?.openCurrentChat() }
-  @objc private func runDiagnostics() { state?.submit("Welcher Chat ist gerade aktiv?") }
+  @objc private func showDiagnostics() { state?.showSetupWindow(initialPane: .diagnostics) }
   @objc private func quit() { NSApplication.shared.terminate(nil) }
 
   @objc private func selectProfile(_ sender: NSMenuItem) {

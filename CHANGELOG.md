@@ -2,6 +2,14 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.6.1 — 2026-08-05
+
+### Menu bar
+
+- Removed the duplicate settings command from the MiddleAI menu.
+- Renamed menu actions consistently in German.
+- Changed the diagnostics shortcut to open the Diagnostics settings pane instead of sending a test message to the active conversation.
+
 ## 0.6.0 — 2026-08-05
 
 ### Voice activation

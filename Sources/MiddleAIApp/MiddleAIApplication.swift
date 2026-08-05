@@ -1211,7 +1211,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       NotificationCenter.default.post(name: .middleAIQuickInputFocus, object: nil)
     }
   }
-  func showSetupWindow() {
+  func showSetupWindow(initialPane: MiddleAISettingsPane = .connection) {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
     if setupWindow == nil {
@@ -1226,10 +1226,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       window.hidesOnDeactivate = false
       window.level = .floating
       window.collectionBehavior = [.moveToActiveSpace]
-      window.contentView = NSHostingView(rootView: SettingsView(state: self))
       window.minSize = NSSize(width: 820, height: 620)
       setupWindow = window
     }
+    setupWindow?.contentView = NSHostingView(
+      rootView: SettingsView(state: self, initialPane: initialPane))
     setupWindow?.center()
     setupWindow?.makeKeyAndOrderFront(nil)
   }
