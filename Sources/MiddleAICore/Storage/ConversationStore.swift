@@ -11,9 +11,11 @@ public protocol ConversationStoreProtocol: Sendable {
   ) throws
   func messages(conversationID: String, limit: Int) throws -> [Message]
   func setSetting(key: String, value: String) throws
+  func removeSetting(key: String) throws
   func setting(key: String) throws -> String?
   func deleteAllConversations() throws
   func deleteConversations(lastUsedBefore date: Date) throws
+  func deleteEmptyConversations() throws
   func cacheStatistics() throws -> ConversationCacheStatistics
 }
 
@@ -208,6 +210,13 @@ public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecke
     }
   }
 
+  public func removeSetting(key: String) throws {
+    try withStatement("DELETE FROM settings WHERE key=?") { statement in
+      bind(key, 1, statement)
+      try stepDone(statement)
+    }
+  }
+
   public func deleteAllConversations() throws {
     try execute("BEGIN IMMEDIATE;")
     do {
@@ -229,6 +238,25 @@ public final class SQLiteConversationStore: ConversationStoreProtocol, @unchecke
       try conversation(id: current) == nil
     {
       try execute("DELETE FROM settings WHERE key='current_conversation_id';")
+    }
+  }
+
+  public func deleteEmptyConversations() throws {
+    try execute("BEGIN IMMEDIATE;")
+    do {
+      try execute(
+        "DELETE FROM embeddings WHERE conversation_id IN (SELECT id FROM conversations WHERE NOT EXISTS (SELECT 1 FROM messages_cache WHERE conversation_id=conversations.id));"
+      )
+      try execute(
+        "DELETE FROM conversations WHERE NOT EXISTS (SELECT 1 FROM messages_cache WHERE conversation_id=conversations.id);"
+      )
+      try execute(
+        "DELETE FROM settings WHERE key='current_conversation_id' AND NOT EXISTS (SELECT 1 FROM conversations WHERE id=settings.value);"
+      )
+      try execute("COMMIT;")
+    } catch {
+      try? execute("ROLLBACK;")
+      throw error
     }
   }
 
@@ -316,6 +344,7 @@ public final class InMemoryConversationStore: ConversationStoreProtocol, @unchec
   public func setSetting(key: String, value: String) throws {
     lock.withLock { settings[key] = value }
   }
+  public func removeSetting(key: String) throws { lock.withLock { settings[key] = nil } }
   public func setting(key: String) throws -> String? { lock.withLock { settings[key] } }
   public func deleteAllConversations() throws {
     lock.withLock {
@@ -333,6 +362,19 @@ public final class InMemoryConversationStore: ConversationStoreProtocol, @unchec
         cached[id] = nil
       }
       if let active = settings["current_conversation_id"], removed.contains(active) {
+        settings["current_conversation_id"] = nil
+      }
+    }
+  }
+  public func deleteEmptyConversations() throws {
+    lock.withLock {
+      let empty = Set(
+        conversations.keys.filter { cached[$0, default: []].isEmpty })
+      for id in empty {
+        conversations[id] = nil
+        cached[id] = nil
+      }
+      if let active = settings["current_conversation_id"], empty.contains(active) {
         settings["current_conversation_id"] = nil
       }
     }

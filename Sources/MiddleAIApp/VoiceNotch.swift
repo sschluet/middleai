@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum VoiceMode: Sendable {
+enum VoiceMode: Hashable, Sendable {
   case dictation
   case assistant
 

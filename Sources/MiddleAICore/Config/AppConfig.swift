@@ -83,10 +83,17 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public struct Hotkeys: Codable, Equatable, Sendable {
     public var dictation: String
     public var assistant: String
+    public var dictationDoubleTap: Bool
+    public var assistantDoubleTap: Bool
 
-    public init(dictation: String = "left_option", assistant: String = "right_option") {
+    public init(
+      dictation: String = "left_option", assistant: String = "right_option",
+      dictationDoubleTap: Bool = true, assistantDoubleTap: Bool = true
+    ) {
       self.dictation = dictation
       self.assistant = assistant
+      self.dictationDoubleTap = dictationDoubleTap
+      self.assistantDoubleTap = assistantDoubleTap
     }
   }
   public struct API: Codable, Equatable, Sendable {
@@ -447,6 +454,10 @@ public enum ConfigLoader {
           .filter { !$0.isEmpty }
       case ("hotkeys", "dictation"): c.hotkeys.dictation = value
       case ("hotkeys", "assistant"): c.hotkeys.assistant = value
+      case ("hotkeys", "dictation_double_tap"):
+        c.hotkeys.dictationDoubleTap = try legacyBool(value, line: index)
+      case ("hotkeys", "assistant_double_tap"):
+        c.hotkeys.assistantDoubleTap = try legacyBool(value, line: index)
       case ("api", "bind"): c.api.bind = value
       case ("api", "port"):
         guard let port = UInt16(value) else {

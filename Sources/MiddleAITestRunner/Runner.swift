@@ -45,7 +45,9 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("Hosted conversation history", testHostedConversationHistory),
       ("HeuristicRouter new topic", testRouterNewTopic), ("HybridRouter", testHybrid),
       ("HybridRouter threshold", testHybridThreshold),
-      ("ConversationManager", testManager), ("Confidence management", testConfidence),
+      ("ConversationManager", testManager), ("Empty conversation drafts", testConversationDrafts),
+      ("Activation double tap", testActivationGestureGate),
+      ("Confidence management", testConfidence),
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
       ("Voice sample accumulator", AudioTTSRegressionTests.testVoiceAccumulator),
       ("Private local TTS cache", AudioTTSRegressionTests.testTTSCache),
@@ -86,6 +88,8 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.localLLM.url = "http://127.0.0.1:18881"
     c.hotkeys.dictation = "left_control"
     c.hotkeys.assistant = "right_command"
+    c.hotkeys.dictationDoubleTap = false
+    c.hotkeys.assistantDoubleTap = true
     c.tts.localCommand = "/tmp/model #1/\"voice\""
     c.tts.outputDeviceUID = "test-output-device"
     c.tts.pronunciationDictionary = ["OpenWebUI": "Open Web U I"]
@@ -136,7 +140,8 @@ struct FixedRouter: ConversationRoutingStrategy {
         #"{"decision":"switch_chat","chat_id":"abc","confidence":0.9,"reason":"match"}"#.utf8))
     try expect(routed.chatID == "abc", "local router snake-case chat ID")
     try expect(
-      parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command",
+      parsed.hotkeys.dictation == "left_control" && parsed.hotkeys.assistant == "right_command"
+        && !parsed.hotkeys.dictationDoubleTap && parsed.hotkeys.assistantDoubleTap,
       "activation keys round-trip")
     try expect(parsed.tts.localCommand == c.tts.localCommand, "escaped value round-trip")
     try expect(parsed.tts.outputDeviceUID == "test-output-device", "output device round-trip")
@@ -355,6 +360,16 @@ struct FixedRouter: ConversationRoutingStrategy {
     try expect(
       savedConversation?.openWebUIBaseURL == "https://ai.example", "remote scope persistence")
     try expect(savedMessages.first?.content == "Gardena", "message persistence")
+    let empty = Conversation(title: "Empty")
+    try store.saveConversation(empty)
+    try store.setSetting(key: "current_conversation_id", value: empty.id)
+    try store.deleteEmptyConversations()
+    let cleanedEmpty = try store.conversation(id: empty.id)
+    let retainedConversation = try store.conversation(id: c.id)
+    let cleanedSelection = try store.setting(key: "current_conversation_id")
+    try expect(cleanedEmpty == nil, "empty SQLite conversation cleanup")
+    try expect(retainedConversation?.id == c.id, "non-empty SQLite conversation retained")
+    try expect(cleanedSelection == nil, "empty current selection cleanup")
     let mode =
       try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions]
       as? NSNumber
@@ -579,6 +594,71 @@ struct FixedRouter: ConversationRoutingStrategy {
     let (_, r) = try await manager.select(for: "MacBook")
     try expect(r.decision == RoutingDecisionKind.newChat, "routing")
   }
+  static func testConversationDrafts() async throws {
+    let store = InMemoryConversationStore()
+    let manager = ConversationManager(
+      store: store,
+      router: FixedRouter(
+        result: RoutingDecision(decision: .continueCurrent, confidence: 0.9, reason: "test")))
+    var draft = try manager.create(title: "Noch leer", profile: "default")
+    try expect(manager.currentConversation?.id == draft.id, "draft is active in memory")
+    let emptyDraftStatistics = try store.cacheStatistics()
+    try expect(
+      emptyDraftStatistics == ConversationCacheStatistics(conversations: 0, messages: 0),
+      "empty draft is not persisted")
+    let persistedSelection = try store.setting(key: "current_conversation_id")
+    try expect(
+      persistedSelection == nil, "draft is not selected on disk")
+
+    draft.openWebUIChatID = "remote-chat"
+    try manager.update(draft)
+    let prematurelyPersistedDraft = try store.conversation(id: draft.id)
+    try expect(
+      prematurelyPersistedDraft == nil, "provider metadata keeps draft ephemeral")
+    try manager.saveExchange(
+      user: Message(role: .user, content: "Frage"),
+      assistant: Message(role: .assistant, content: "Antwort"), conversation: draft)
+    let completedStatistics = try store.cacheStatistics()
+    try expect(
+      completedStatistics == ConversationCacheStatistics(conversations: 1, messages: 2),
+      "first complete exchange persists the conversation")
+
+    let abandoned = try manager.create(title: "Verworfen", profile: "default")
+    try expect(
+      manager.currentConversation?.id == abandoned.id, "new draft replaces active selection")
+    let abandonedStatistics = try store.cacheStatistics()
+    try expect(
+      abandonedStatistics == ConversationCacheStatistics(conversations: 1, messages: 2),
+      "abandoned draft does not add history")
+
+    let legacyEmpty = Conversation(title: "Legacy empty")
+    try store.saveConversation(legacyEmpty)
+    try store.setSetting(key: "current_conversation_id", value: legacyEmpty.id)
+    _ = ConversationManager(
+      store: store,
+      router: FixedRouter(
+        result: RoutingDecision(decision: .newChat, confidence: 0.9, reason: "test")))
+    let cleanedLegacyConversation = try store.conversation(id: legacyEmpty.id)
+    try expect(cleanedLegacyConversation == nil, "legacy empty chat is removed")
+  }
+  static func testActivationGestureGate() async throws {
+    var gate = ActivationGestureGate<String>(maximumInterval: 0.45)
+    try expect(
+      gate.register("dictation", requiresDoubleTap: true, at: 1) == .waitingForSecondTap,
+      "first tap waits")
+    try expect(
+      gate.register("dictation", requiresDoubleTap: true, at: 1.3) == .activate,
+      "second short tap activates")
+    try expect(
+      gate.register("assistant", requiresDoubleTap: true, at: 2) == .waitingForSecondTap,
+      "other mode starts its own sequence")
+    try expect(
+      gate.register("assistant", requiresDoubleTap: true, at: 2.6) == .waitingForSecondTap,
+      "late second tap starts over")
+    try expect(
+      gate.register("dictation", requiresDoubleTap: false, at: 3) == .activate,
+      "single press mode activates immediately")
+  }
   static func testConfidence() async throws {
     let store = InMemoryConversationStore()
     let manager = ConversationManager(
@@ -644,8 +724,9 @@ struct FixedRouter: ConversationRoutingStrategy {
   }
   @MainActor static func testResponseCancellation() async throws {
     let queue = TTSQueue(provider: RecordingTTS())
+    let store = InMemoryConversationStore()
     let manager = ConversationManager(
-      store: InMemoryConversationStore(),
+      store: store,
       router: FixedRouter(
         result: RoutingDecision(decision: .newChat, confidence: 0.9, reason: "test")))
     var config = AppConfig()
@@ -664,6 +745,10 @@ struct FixedRouter: ConversationRoutingStrategy {
     }
     try await Task.sleep(for: .milliseconds(20))
     try expect(client.cancelledChatID == "test-chat", "OpenWebUI background task stopped")
+    let statistics = try store.cacheStatistics()
+    try expect(
+      statistics == ConversationCacheStatistics(conversations: 0, messages: 0),
+      "cancelled provider request leaves no empty conversation")
   }
   static func testAdapter() async throws {
     let config = URLSessionConfiguration.ephemeral

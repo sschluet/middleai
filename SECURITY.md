@@ -20,6 +20,7 @@ MiddleAI is local-first and transmits only the user's assistant-mode request and
 - INFO logging accepts only an allow-list of event metadata such as source, latency and sizes—not prompt/response text, usernames or arbitrary fields.
 - There is no analytics, telemetry or crash upload. External transfer occurs only for assistant requests, explicit model downloads and user-triggered provider model discovery.
 - The local SQLite cache is protected with owner-only file permissions. It is not independently SQLCipher-encrypted; encryption at rest therefore depends on macOS FileVault. Ephemeral sessions can be used when a conversation should not be written to the cache.
+- A newly opened conversation is retained only in memory until its first complete exchange; cancelled or failed empty drafts are never written to SQLite.
 - Private mode is runtime-only and uses an in-memory conversation store. Leaving it destroys that session. It does not change the retention policy of OpenWebUI, OpenAI or OpenRouter.
 
 Optional model downloads remain subject to their own licenses. Voxtral is CC BY-NC 4.0 and must not be used for commercial or business purposes. See `THIRD_PARTY_NOTICES.md` for sources and terms.

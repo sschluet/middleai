@@ -2,6 +2,20 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.6.0 — 2026-08-05
+
+### Voice activation
+
+- Added independently configurable single-press or double-tap activation for dictation and assistant mode.
+- Enabled intentional 450-ms double-tap activation by default for both Option keys.
+- Kept one-press recording completion and one-press cancellation during transcription, provider streaming and speech output.
+
+### Conversations
+
+- New conversations now remain in memory until the first complete user/assistant exchange succeeds.
+- Cancelled input, provider failures and unopened compose windows no longer add empty history entries.
+- Existing empty local cache rows and their routing metadata are removed automatically on startup.
+
 ## 0.5.1 — 2026-08-04
 
 ### Dictation

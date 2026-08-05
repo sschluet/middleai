@@ -32,7 +32,10 @@ import OSLog
   private var recordingStartedAt: Date?
   private var dictationTarget: DictationTarget?
   private var processingTask: Task<Void, Never>?
+  private var processingMode: VoiceMode?
   private var assistantRequestActive = false
+  private var activationGate = ActivationGestureGate<VoiceMode>()
+  private var activationGateResetTask: Task<Void, Never>?
   private var microphoneAuthorized = false
   private let logger = Logger(subsystem: "de.middleai.app", category: "voice")
 
@@ -71,6 +74,7 @@ import OSLog
   }
 
   func reloadActivationKeys() {
+    clearPendingActivation()
     keyMonitor.start()
     onStatus(readyStatus)
   }
@@ -89,8 +93,10 @@ import OSLog
   }
 
   func cancelCurrentInteraction() {
+    clearPendingActivation()
     processingTask?.cancel()
     processingTask = nil
+    processingMode = nil
     assistantRequestActive = false
     engineProvider()?.interrupt()
     if activeMode != nil { cancel() } else { overlay.hide() }
@@ -107,7 +113,12 @@ import OSLog
 
   private var readyStatus: String {
     let keys = activationKeys
-    return "Voice bereit: \(keys.dictation.compactLabel) / \(keys.assistant.compactLabel)"
+    let hotkeys = configProvider().hotkeys
+    let dictation =
+      hotkeys.dictationDoubleTap ? "2× \(keys.dictation.compactLabel)" : keys.dictation.compactLabel
+    let assistant =
+      hotkeys.assistantDoubleTap ? "2× \(keys.assistant.compactLabel)" : keys.assistant.compactLabel
+    return "Voice bereit: \(dictation) / \(assistant)"
   }
 
   private func requestPermissions() {
@@ -129,29 +140,28 @@ import OSLog
 
   private func press(_ mode: VoiceMode) {
     if activeMode == mode, latchedMode == mode {
+      clearPendingActivation()
       latchedMode = nil
       ignoreReleaseForMode = mode
       finishRecording(mode)
       return
     }
-    if mode == .assistant,
-      assistantRequestActive || engineProvider()?.ttsQueue.isSpeaking == true
+    if activeMode == mode { return }
+    if processingMode == mode
+      || (mode == .assistant
+        && (assistantRequestActive || engineProvider()?.ttsQueue.isSpeaking == true))
     {
-      assistantRequestActive = false
-      processingTask?.cancel()
-      processingTask = nil
-      engineProvider()?.interrupt()
-      overlay.hide()
-      ignoreReleaseForMode = .assistant
-      onDismissed()
-      onStatus("Antwort und Sprachausgabe abgebrochen")
+      abortProcessing(mode)
       return
     }
     guard activeMode == nil else {
       cancel()
       return
     }
+    guard shouldActivate(afterPressing: mode) else { return }
     processingTask?.cancel()
+    processingTask = nil
+    processingMode = nil
     engineProvider()?.ttsQueue.stop()
     guard microphoneAuthorized else {
       requestPermissions()
@@ -233,6 +243,7 @@ import OSLog
       return
     }
     overlay.update(phase: .transcribing, detail: "Parakeet TDT v3 verarbeitet die Aufnahme lokal")
+    processingMode = mode
     processingTask = Task { [weak self] in
       guard let self else { return }
       do {
@@ -262,7 +273,11 @@ import OSLog
           await MainActor.run { self.runAssistant(text) }
         }
       } catch is CancellationError {
-        await MainActor.run { self.overlay.hide() }
+        await MainActor.run {
+          self.processingTask = nil
+          self.processingMode = nil
+          self.overlay.hide()
+        }
       } catch let error as VoiceCaptureError {
         await MainActor.run {
           switch error {
@@ -284,6 +299,10 @@ import OSLog
   }
 
   private func finishDictation(_ text: String, target: DictationTarget?) async {
+    defer {
+      processingTask = nil
+      processingMode = nil
+    }
     do {
       let destination = target ?? insertion.captureTarget()
       let dictationConfig = configProvider().dictation
@@ -338,6 +357,7 @@ import OSLog
         await MainActor.run {
           self.assistantRequestActive = false
           self.processingTask = nil
+          self.processingMode = nil
           self.overlay.hide(after: 0.25)
           self.onDismissed()
           self.onStatus(self.readyStatus)
@@ -346,12 +366,14 @@ import OSLog
         await MainActor.run {
           self.assistantRequestActive = false
           self.processingTask = nil
+          self.processingMode = nil
           self.overlay.hide()
         }
       } catch {
         await MainActor.run {
           self.assistantRequestActive = false
           self.processingTask = nil
+          self.processingMode = nil
           self.fail(error)
         }
       }
@@ -359,6 +381,7 @@ import OSLog
   }
 
   private func cancel() {
+    clearPendingActivation()
     guard activeMode != nil else { return }
     activeMode = nil
     latchedMode = nil
@@ -371,6 +394,8 @@ import OSLog
   }
 
   private func dismissSilently() {
+    processingTask = nil
+    processingMode = nil
     overlay.hide()
     onDismissed()
     onStatus(readyStatus)
@@ -383,7 +408,57 @@ import OSLog
     return words.contains { !fillerOnly.contains(String($0)) }
   }
 
+  private func shouldActivate(afterPressing mode: VoiceMode) -> Bool {
+    let hotkeys = configProvider().hotkeys
+    let requiresDoubleTap =
+      mode == .dictation ? hotkeys.dictationDoubleTap : hotkeys.assistantDoubleTap
+    switch activationGate.register(
+      mode, requiresDoubleTap: requiresDoubleTap,
+      at: ProcessInfo.processInfo.systemUptime)
+    {
+    case .activate:
+      activationGateResetTask?.cancel()
+      activationGateResetTask = nil
+      return true
+    case .waitingForSecondTap:
+      activationGateResetTask?.cancel()
+      activationGateResetTask = Task { [weak self] in
+        try? await Task.sleep(for: .seconds(0.45))
+        guard !Task.isCancelled, let self else { return }
+        self.activationGate.clear()
+        self.activationGateResetTask = nil
+        self.onStatus(self.readyStatus)
+      }
+      let key = mode == .dictation ? activationKeys.dictation : activationKeys.assistant
+      onStatus("\(key.label) erneut kurz drücken")
+      return false
+    }
+  }
+
+  private func clearPendingActivation() {
+    activationGateResetTask?.cancel()
+    activationGateResetTask = nil
+    activationGate.clear()
+  }
+
+  private func abortProcessing(_ mode: VoiceMode) {
+    clearPendingActivation()
+    assistantRequestActive = false
+    processingTask?.cancel()
+    processingTask = nil
+    processingMode = nil
+    engineProvider()?.interrupt()
+    overlay.hide()
+    ignoreReleaseForMode = mode
+    onDismissed()
+    onStatus(
+      mode == .assistant
+        ? "Antwort und Sprachausgabe abgebrochen" : "Diktatverarbeitung abgebrochen")
+  }
+
   private func fail(_ error: Error) {
+    processingTask = nil
+    processingMode = nil
     let message = error.localizedDescription
     logger.error(
       "voice_failed type=\(String(describing: type(of: error)), privacy: .public) reason=\(message, privacy: .private(mask: .hash))"

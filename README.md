@@ -11,7 +11,7 @@
 
 MiddleAI is a local-first macOS voice layer for dictation and spoken AI requests. It recognizes speech locally, selects the appropriate conversation automatically, streams answers from your own OpenWebUI, the OpenAI Platform or OpenRouter, and speaks complete sentences locally on the Mac.
 
-Tap the left Option key to start dictation and tap it again to finish, or hold it for push-to-talk. The right Option key works the same way for spoken requests to the configured AI provider. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
+By default, double-tap the left Option key to start dictation and tap it once to finish. Double-tap the right Option key for spoken requests to the configured AI provider. Single-press activation can be restored independently for either mode in Settings. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
 
 ## Download
 
@@ -24,7 +24,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 ## What is included
 
 - Native SwiftUI menu-bar app with first-run settings, a searchable MiddleAI conversation window, status, profiles and current-chat link
-- Native push-to-talk handling for the separate left and right Option keys
+- Independently configurable single-press or intentional double-tap handling for the left and right Option keys
 - Local Parakeet TDT v3 multilingual speech recognition through FluidAudio and Core ML
 - Native 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
 - Silent dismissal for accidental, too-short or empty Option-key recordings
@@ -124,8 +124,8 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 4. Keep TLS verification enabled. Add a company CA PEM/DER path when required.
 5. Select **Save & Test Connection**.
 6. Allow MiddleAI under **Privacy & Security** for Microphone and Accessibility. Restart MiddleAI if macOS asks for it.
-7. Tap left Option, speak and tap it again to insert dictation into the active field. Holding and releasing also works.
-8. Use right Option the same way to ask the configured provider. MiddleAI displays and speaks the response.
+7. Double-tap left Option, speak and tap it once to insert dictation into the active field.
+8. Double-tap right Option to ask the configured provider. MiddleAI displays and speaks the response. One press cancels transcription, provider work or speech that is already running.
 
 For OpenWebUI, select either username/password or API-key authentication explicitly. The username field is used only for password login; both secret types are stored in a Keychain scope derived from the server and active profile. This lets an entered replacement secret be tested without exposing or overwriting another server's credential.
 
@@ -194,6 +194,8 @@ The server refuses configuration on `0.0.0.0`. New installations require a rando
 Commands such as “Neuer Chat”, “Stopp”, “Nicht vorlesen”, “Zurück zum MacBook-Thema” and “Architekturmodus” are intercepted locally. Normal input is scored against the current and recent chats using time, title, summary, recent user/assistant messages and local semantic similarity. The hybrid router combines heuristic and vector decisions and can optionally ask a local `/v1/chat/completions` routing model. If that model is unavailable, the heuristic path remains operational.
 
 Within the configured continuation window, a new voice request continues the active conversation and sends its prior user/assistant messages to OpenWebUI, OpenAI or OpenRouter. This keeps natural follow-ups such as “Warum ist das so?” in context even when they repeat no keywords. Say “Neue Frage” or “Neues Thema”, use the local “Neuer Chat” command, or open a new conversation from the menu to deliberately reset the context.
+
+A newly opened conversation is an in-memory draft. MiddleAI writes it to the local history only when the first complete user/assistant exchange succeeds. Closing an unused compose window, cancelling input or encountering a provider failure therefore cannot create an empty conversation. Empty cache rows left by older versions are removed automatically when the conversation manager starts.
 
 The assistant overlay remains visible while the provider streams and until the local spoken response has actually finished. Pressing the configured assistant activation key again during generation or speech cancels the remote request, the local TTS queue and the overlay together.
 

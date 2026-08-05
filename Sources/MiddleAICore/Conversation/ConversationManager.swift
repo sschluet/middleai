@@ -6,6 +6,7 @@ public final class ConversationManager: @unchecked Sendable {
   private let confidenceAsk: Double
   private let lock = NSLock()
   private var currentID: String?
+  private var pendingConversation: Conversation?
 
   public init(
     store: any ConversationStoreProtocol, router: any ConversationRoutingStrategy,
@@ -14,11 +15,15 @@ public final class ConversationManager: @unchecked Sendable {
     self.store = store
     self.router = router
     self.confidenceAsk = confidenceAsk
+    try? store.deleteEmptyConversations()
     self.currentID = try? store.setting(key: "current_conversation_id")
   }
 
   public var currentConversation: Conversation? {
-    lock.managerLock { currentID }.flatMap { try? store.conversation(id: $0) }
+    let state = lock.managerLock { (currentID, pendingConversation) }
+    guard let currentID = state.0 else { return nil }
+    if state.1?.id == currentID { return state.1 }
+    return try? store.conversation(id: currentID)
   }
 
   public func select(for input: String) async throws -> (Conversation?, RoutingDecision) {
@@ -55,11 +60,23 @@ public final class ConversationManager: @unchecked Sendable {
 
   public func create(title: String, profile: String) throws -> Conversation {
     let c = Conversation(title: title, summary: String(title.prefix(240)), profile: profile)
-    try store.saveConversation(c)
-    try activate(c.id)
+    // A new conversation remains an in-memory draft until a complete exchange succeeds. This
+    // keeps cancelled input, provider failures and a merely opened compose window out of history.
+    try store.removeSetting(key: "current_conversation_id")
+    lock.managerLock {
+      pendingConversation = c
+      currentID = c.id
+    }
     return c
   }
   public func update(_ c: Conversation) throws {
+    let updatedPending = lock.managerLock { () -> Bool in
+      guard pendingConversation?.id == c.id else { return false }
+      pendingConversation = c
+      currentID = c.id
+      return true
+    }
+    if updatedPending { return }
     try store.saveConversation(c)
     try activate(c.id)
   }
@@ -70,7 +87,10 @@ public final class ConversationManager: @unchecked Sendable {
     user: Message, assistant: Message, conversation: Conversation
   ) throws {
     try store.saveExchange(user: user, assistant: assistant, conversation: conversation)
-    lock.managerLock { currentID = conversation.id }
+    lock.managerLock {
+      currentID = conversation.id
+      if pendingConversation?.id == conversation.id { pendingConversation = nil }
+    }
   }
   public func messages(for id: String) throws -> [Message] {
     try store.messages(conversationID: id, limit: 100)
@@ -97,20 +117,28 @@ public final class ConversationManager: @unchecked Sendable {
   }
   public func clearLocalHistory() throws {
     try store.deleteAllConversations()
-    lock.managerLock { currentID = nil }
+    lock.managerLock {
+      currentID = nil
+      pendingConversation = nil
+    }
   }
   public func purgeLocalHistory(olderThan date: Date) throws {
     try store.deleteConversations(lastUsedBefore: date)
     if let active = lock.managerLock({ currentID }), try store.conversation(id: active) == nil {
-      lock.managerLock { currentID = nil }
+      lock.managerLock {
+        if pendingConversation?.id != active { currentID = nil }
+      }
     }
   }
   public func activate(_ id: String) throws {
     guard try store.conversation(id: id) != nil else {
       throw MiddleAIError.storage("Conversation no longer exists")
     }
-    lock.managerLock { currentID = id }
     try store.setSetting(key: "current_conversation_id", value: id)
+    lock.managerLock {
+      currentID = id
+      pendingConversation = nil
+    }
   }
 }
 

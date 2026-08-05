@@ -811,11 +811,21 @@ struct SettingsView: View {
           title: "Diktat", detail: "Erkannten Text ins gerade aktive Feld einfügen",
           selection: ActivationKeyChoice(rawValue: state.config.hotkeys.dictation) ?? .leftOption
         ) { state.setActivationKey($0, for: .dictation) }
+        Toggle(
+          "Diktat erst nach zweimaligem Tippen starten",
+          isOn: Binding(
+            get: { state.config.hotkeys.dictationDoubleTap },
+            set: { state.setActivationDoubleTap($0, for: .dictation) }))
         Divider()
         ActivationKeyPickerRow(
           title: "MiddleAI", detail: "Gesprochene Anfrage an den gewählten KI-Anbieter senden",
           selection: ActivationKeyChoice(rawValue: state.config.hotkeys.assistant) ?? .rightOption
         ) { state.setActivationKey($0, for: .assistant) }
+        Toggle(
+          "MiddleAI erst nach zweimaligem Tippen starten",
+          isOn: Binding(
+            get: { state.config.hotkeys.assistantDoubleTap },
+            set: { state.setActivationDoubleTap($0, for: .assistant) }))
         Divider()
         HStack(alignment: .top) {
           Label(
@@ -828,7 +838,7 @@ struct SettingsView: View {
             .buttonStyle(.borderless)
         }
         Text(
-          "Kurz drücken aktiviert den freihändigen Modus. Gedrückthalten und Loslassen funktioniert ebenfalls. Command- und Umschalttasten können mit Tastenkürzeln anderer Apps kollidieren; die beiden Optionstasten bleiben die empfohlene Belegung."
+          "Beim Doppeltippen müssen beide kurzen Tastendrücke innerhalb von 450 Millisekunden erfolgen. Ein einzelner Druck beendet weiterhin eine laufende Aufnahme und verarbeitet sie. Während Transkription, KI-Anfrage oder Sprachausgabe bricht ein einzelner Druck den Vorgang sofort ab. Command- und Umschalttasten können mit Tastenkürzeln anderer Apps kollidieren; die beiden Optionstasten bleiben die empfohlene Belegung."
         )
         .font(.caption).foregroundStyle(.secondary)
       }

@@ -51,6 +51,25 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertEqual(parsed.stt, config.stt)
   }
 
+  func testActivationGestureSettingsAndGate() throws {
+    var config = AppConfig()
+    config.hotkeys.dictationDoubleTap = true
+    config.hotkeys.assistantDoubleTap = false
+    let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    XCTAssertTrue(parsed.hotkeys.dictationDoubleTap)
+    XCTAssertFalse(parsed.hotkeys.assistantDoubleTap)
+
+    var gate = ActivationGestureGate<String>(maximumInterval: 0.45)
+    XCTAssertEqual(
+      gate.register("dictation", requiresDoubleTap: true, at: 10), .waitingForSecondTap)
+    XCTAssertEqual(gate.register("dictation", requiresDoubleTap: true, at: 10.4), .activate)
+    XCTAssertEqual(
+      gate.register("assistant", requiresDoubleTap: true, at: 20), .waitingForSecondTap)
+    XCTAssertEqual(
+      gate.register("assistant", requiresDoubleTap: true, at: 20.5), .waitingForSecondTap)
+    XCTAssertEqual(gate.register("assistant", requiresDoubleTap: false, at: 21), .activate)
+  }
+
   func testHostedProviderAndAudioOutputRoundTrip() throws {
     var config = AppConfig()
     config.assistant.provider = "openai"
@@ -192,6 +211,37 @@ final class MiddleAICoreTests: XCTestCase {
     XCTAssertEqual(messages.map(\.content), ["Frage", "Antwort"])
     XCTAssertEqual(try store.conversation(id: conversation.id)?.summary, "Complete")
     XCTAssertEqual(try store.setting(key: "current_conversation_id"), conversation.id)
+  }
+
+  func testEmptyConversationDraftIsNotPersistedAndLegacyEmptyRowsAreRemoved() throws {
+    let store = InMemoryConversationStore()
+    let router = HeuristicRouter()
+    let manager = ConversationManager(store: store, router: router)
+    var draft = try manager.create(title: "Noch leer", profile: "default")
+
+    XCTAssertEqual(manager.currentConversation?.id, draft.id)
+    XCTAssertEqual(
+      try store.cacheStatistics(), ConversationCacheStatistics(conversations: 0, messages: 0))
+    XCTAssertNil(try store.setting(key: "current_conversation_id"))
+
+    draft.openWebUIChatID = "remote-chat"
+    try manager.update(draft)
+    XCTAssertNil(try store.conversation(id: draft.id))
+    try manager.saveExchange(
+      user: Message(role: .user, content: "Frage"),
+      assistant: Message(role: .assistant, content: "Antwort"), conversation: draft)
+    XCTAssertEqual(
+      try store.cacheStatistics(), ConversationCacheStatistics(conversations: 1, messages: 2))
+
+    _ = try manager.create(title: "Verworfen", profile: "default")
+    XCTAssertEqual(
+      try store.cacheStatistics(), ConversationCacheStatistics(conversations: 1, messages: 2))
+
+    let legacyEmpty = Conversation(title: "Legacy empty")
+    try store.saveConversation(legacyEmpty)
+    try store.setSetting(key: "current_conversation_id", value: legacyEmpty.id)
+    _ = ConversationManager(store: store, router: router)
+    XCTAssertNil(try store.conversation(id: legacyEmpty.id))
   }
 
   func testHostedContextWindowRetainsSystemAndNewestTurnWithinBudget() {

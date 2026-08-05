@@ -22,10 +22,12 @@ left Option  -> AVAudioEngine -> bounded 16-kHz accumulator -> configurable Para
 right Option -> AVAudioEngine -> Parakeet TDT v3 -> MiddleAIEngine -> answer provider -> local TTS
 ```
 
-The global Option-key monitor supports both tap-to-toggle and push-to-talk. A short tap latches
-recording until the same Option key is tapped again. Holding and releasing finishes immediately. A
-normal key or mouse action while an Option key is held cancels capture, preserving standard
-Option-key combinations. The overlay uses a non-activating `NSPanel`, so it does not replace the
+The global modifier-key monitor supports independently configurable single-press and double-tap
+activation. Double-tap is the default and requires two presses within 450 ms; the second release
+latches recording until one further press finishes it. During transcription, provider work or TTS,
+one press cancels immediately without waiting for a second tap. A normal key or mouse action while
+an activation key is held cancels capture, preserving standard modifier-key combinations. The
+overlay uses a non-activating `NSPanel`, so it does not replace the
 dictation target or take keyboard focus.
 
 The island adapts to the physical MacBook notch and starts at the top safe-area boundary. On an
@@ -50,7 +52,10 @@ muted or misrouted microphone can be distinguished from an STT decoding failure.
 
 ## Conversation state
 
-SQLite stores `conversations`, `messages_cache`, `settings` and a reserved `embeddings` table. The
+SQLite stores `conversations`, `messages_cache`, `settings` and a reserved `embeddings` table. A
+new conversation remains an in-memory draft until its first complete user/assistant exchange, so
+unused compose windows, cancellation and provider failures never create empty history rows. Legacy
+empty rows and their routing metadata are removed when a manager starts. The
 current dependency-free embedding router computes sparse vectors in memory; the table is available
 for a future persistent vector implementation. OpenWebUI remains canonical when selected. OpenAI
 and OpenRouter do not persist MiddleAI chat IDs, so the required locally cached context is sent with

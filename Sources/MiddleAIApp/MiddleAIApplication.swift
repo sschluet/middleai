@@ -778,6 +778,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     saveActivationKeys()
   }
 
+  func setActivationDoubleTap(_ enabled: Bool, for mode: VoiceMode) {
+    switch mode {
+    case .dictation: config.hotkeys.dictationDoubleTap = enabled
+    case .assistant: config.hotkeys.assistantDoubleTap = enabled
+    }
+    saveActivationKeys()
+  }
+
   func resetActivationKeys() {
     config.hotkeys = AppConfig.Hotkeys()
     saveActivationKeys()
