@@ -86,9 +86,12 @@ struct QuickInputView: View {
             Text(state.currentTitle)
               .font(.title3.weight(.semibold))
               .lineLimit(1)
-            Text(state.engine?.activeProfile.capitalized ?? "Default")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+            Text(
+              state.config.profileDisplayName(
+                for: state.engine?.activeProfile ?? state.config.activeProfile)
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
           Spacer()
           Button {

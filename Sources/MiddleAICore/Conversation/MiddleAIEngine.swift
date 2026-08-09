@@ -264,7 +264,7 @@ public enum InputResult: Sendable, Equatable {
       )
     case .switchProfile(let profile):
       activeProfile = profile
-      return .local("Profil \(profile) ist aktiv.")
+      return .local("Profil \(config.profileDisplayName(for: profile)) ist aktiv.")
     }
   }
   private static func title(from text: String) -> String {

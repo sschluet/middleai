@@ -84,12 +84,33 @@ final class MiddleAICoreTests: XCTestCase {
   func testProfileSystemPromptsRoundTrip() throws {
     var config = AppConfig()
     config.activeProfile = "research"
+    config.profiles.names["research"] = "Quellencheck"
     config.profiles.systemPrompts["research"] = "Prüfe jede Quelle und benenne Unsicherheiten."
     let parsed = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
     XCTAssertEqual(parsed.activeProfile, "research")
+    XCTAssertEqual(parsed.profileDisplayName(for: "research"), "Quellencheck")
+    XCTAssertEqual(parsed.profileID(matching: "quellencheck"), "research")
+    XCTAssertEqual(AppConfig().profileDisplayName(for: "research"), "Recherche")
     XCTAssertEqual(
       parsed.profileSystemPrompt(for: "research"),
       "Prüfe jede Quelle und benenne Unsicherheiten.")
+  }
+
+  func testExistingConfigurationReceivesDefaultProfileNames() throws {
+    let rendered = ConfigLoader.renderYAML(AppConfig())
+    var root = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(rendered.utf8)) as? [String: Any])
+    var values = try XCTUnwrap(root["config"] as? [String: Any])
+    var profiles = try XCTUnwrap(values["profiles"] as? [String: Any])
+    profiles.removeValue(forKey: "names")
+    values["profiles"] = profiles
+    root["config"] = values
+    let legacyCanonical = try JSONSerialization.data(withJSONObject: root)
+
+    let parsed = try ConfigLoader.parseYAML(String(decoding: legacyCanonical, as: UTF8.self))
+
+    XCTAssertEqual(parsed.profileDisplayName(for: "default"), "Standard")
+    XCTAssertEqual(parsed.profileDisplayName(for: "architecture"), "Architektur")
   }
 
   func testProfileOverridesAreResolvedWithoutMutatingGlobalDefaults() throws {
@@ -125,6 +146,10 @@ final class MiddleAICoreTests: XCTestCase {
     invalidProfile.profiles.overrides["coding"] = AppConfig.ProfileOverrides(
       contextBudgetCharacters: 3_999)
     XCTAssertThrowsError(try ConfigLoader.parseYAML(ConfigLoader.renderYAML(invalidProfile)))
+
+    var duplicateNames = AppConfig()
+    duplicateNames.profiles.names["coding"] = "Management"
+    XCTAssertThrowsError(try ConfigLoader.parseYAML(ConfigLoader.renderYAML(duplicateNames)))
   }
 
   func testSupportReportOmitsSecretsAndFailedDetails() {

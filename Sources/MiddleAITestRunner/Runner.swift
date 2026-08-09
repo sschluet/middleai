@@ -110,6 +110,7 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.stt.automaticSilenceStop = true
     c.privacy.localCacheRetentionDays = 365
     c.activeProfile = "coding"
+    c.profiles.names["coding"] = "Entwicklung Plus"
     c.profiles.systemPrompts["coding"] = "Antworte mit wartbarem Swift-Code."
     let rendered = ConfigLoader.renderYAML(c)
     let parsed = try ConfigLoader.parseYAML(rendered)
@@ -163,6 +164,11 @@ struct FixedRouter: ConversationRoutingStrategy {
       "STT settings round-trip")
     try expect(parsed.privacy.localCacheRetentionDays == 365, "cache retention round-trip")
     try expect(parsed.activeProfile == "coding", "active profile persistence")
+    try expect(
+      parsed.profileDisplayName(for: "coding") == "Entwicklung Plus"
+        && parsed.profileID(matching: "entwicklung plus") == "coding"
+        && AppConfig().profileDisplayName(for: "coding") == "Coding",
+      "custom profile name persistence and stable ID resolution")
     try expect(
       parsed.profileSystemPrompt(for: "coding") == "Antworte mit wartbarem Swift-Code.",
       "profile prompt persistence")

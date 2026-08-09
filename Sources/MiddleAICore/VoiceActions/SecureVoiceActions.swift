@@ -160,10 +160,9 @@ public struct StructuredVoiceActionParser: Sendable {
   }
 
   private static func isSafeIdentifier(_ value: String) -> Bool {
-    guard (1...64).contains(value.count) else { return false }
-    return value.unicodeScalars.allSatisfy {
-      CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_ ")).contains($0)
-    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.count <= 60 else { return false }
+    return !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
   }
 }
 

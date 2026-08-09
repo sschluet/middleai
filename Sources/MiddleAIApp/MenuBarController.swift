@@ -61,14 +61,20 @@ final class MenuBarController: NSObject {
     menu.addItem(informationalItem(state?.currentTitle ?? "No active conversation"))
     menu.addItem(.separator())
 
+    let activeProfile = state?.engine?.activeProfile ?? state?.config.activeProfile ?? "default"
+    let activeProfileName =
+      state?.config.profileDisplayName(for: activeProfile)
+      ?? AppConfig.defaultProfileName(for: activeProfile)
     let profileItem = NSMenuItem(
-      title:
-        "Profile: \(state?.engine?.activeProfile.capitalized ?? state?.config.activeProfile.capitalized ?? "Default")",
-      action: nil, keyEquivalent: "")
+      title: "Profil: \(activeProfileName)", action: nil, keyEquivalent: "")
     let profileMenu = NSMenu(title: "Profile")
-    for profile in ["default", "management", "architecture", "coding", "research"] {
-      let item = actionItem(profile.capitalized, action: #selector(selectProfile(_:)))
+    for profile in AppConfig.supportedProfileIDs {
+      let title =
+        state?.config.profileDisplayName(for: profile)
+        ?? AppConfig.defaultProfileName(for: profile)
+      let item = actionItem(title, action: #selector(selectProfile(_:)))
       item.representedObject = profile
+      item.state = profile == activeProfile ? .on : .off
       profileMenu.addItem(item)
     }
     profileItem.submenu = profileMenu

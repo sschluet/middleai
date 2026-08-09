@@ -124,6 +124,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var strictOffline = false
   }
   public struct Profiles: Codable, Equatable, Sendable {
+    /// User-facing labels keyed by stable profile ID. IDs remain unchanged so conversations,
+    /// memories, prompts and provider overrides keep their existing association after a rename.
+    public var names: [String: String] = AppConfig.defaultProfileNames
     public var systemPrompts: [String: String] = AppConfig.defaultProfileSystemPrompts
     public var overrides: [String: ProfileOverrides] = [:]
   }
@@ -153,6 +156,13 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
   public static let supportedProfileIDs = [
     "default", "management", "architecture", "coding", "research",
+  ]
+  public static let defaultProfileNames: [String: String] = [
+    "default": "Standard",
+    "management": "Management",
+    "architecture": "Architektur",
+    "coding": "Coding",
+    "research": "Recherche",
   ]
   public static let defaultProfileSystemPrompts: [String: String] = [
     "default": "",
@@ -190,6 +200,26 @@ public struct AppConfig: Codable, Equatable, Sendable {
     profiles.systemPrompts[profile] ?? ""
   }
 
+  public func profileDisplayName(for profile: String) -> String {
+    let configured = profiles.names[profile]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return configured.isEmpty ? (Self.defaultProfileNames[profile] ?? profile) : configured
+  }
+
+  /// Resolves a spoken or typed user-facing label without changing the stable profile ID.
+  public func profileID(matching name: String) -> String? {
+    let candidate = Self.normalizedProfileName(name)
+    guard !candidate.isEmpty else { return nil }
+    if let currentNameMatch = Self.supportedProfileIDs.first(where: { profile in
+      Self.normalizedProfileName(profileDisplayName(for: profile)) == candidate
+    }) {
+      return currentNameMatch
+    }
+    return Self.supportedProfileIDs.first { profile in
+      Self.normalizedProfileName(profile) == candidate
+        || Self.normalizedProfileName(Self.defaultProfileNames[profile] ?? "") == candidate
+    }
+  }
+
   public func profileOverrides(for profile: String) -> ProfileOverrides {
     profiles.overrides[profile] ?? ProfileOverrides()
   }
@@ -216,6 +246,19 @@ public struct AppConfig: Codable, Equatable, Sendable {
 
   public static func defaultProfileSystemPrompt(for profile: String) -> String {
     defaultProfileSystemPrompts[profile] ?? ""
+  }
+
+  public static func defaultProfileName(for profile: String) -> String {
+    defaultProfileNames[profile] ?? profile
+  }
+
+  private static func normalizedProfileName(_ value: String) -> String {
+    value.folding(
+      options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "de_DE")
+    )
+    .lowercased()
+    .split(whereSeparator: { $0.isWhitespace })
+    .joined(separator: " ")
   }
 
   public var assistantModel: String {
@@ -619,6 +662,23 @@ public enum ConfigLoader {
     guard (0...3_650).contains(c.privacy.localCacheRetentionDays) else {
       throw MiddleAIError.configuration(
         "privacy.local_cache_retention_days must be between 0 and 3650")
+    }
+    let resolvedProfileNames = AppConfig.supportedProfileIDs.map(c.profileDisplayName(for:))
+    let normalizedProfileNames = resolvedProfileNames.map { name in
+      name.folding(
+        options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "de_DE")
+      ).lowercased()
+    }
+    guard Set(c.profiles.names.keys).isSubset(of: Set(AppConfig.supportedProfileIDs)),
+      c.profiles.names.values.allSatisfy({ name in
+        name.count <= 60
+          && !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+      }),
+      Set(normalizedProfileNames).count == normalizedProfileNames.count
+    else {
+      throw MiddleAIError.configuration(
+        "Profilnamen dürfen höchstens 60 Zeichen lang sein und müssen sich voneinander unterscheiden."
+      )
     }
     guard AppConfig.supportedProfileIDs.contains(c.activeProfile),
       Set(c.profiles.systemPrompts.keys).isSubset(of: Set(AppConfig.supportedProfileIDs)),

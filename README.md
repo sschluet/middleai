@@ -248,7 +248,7 @@ The legacy `logging.level` and `logging.logPrompts` keys remain readable for con
 
 ## Profiles
 
-The Standard, Management, Architecture, Coding and Research profiles can each carry an editable system prompt and optional overrides for answer provider, model, TTS voice, spoken-response mode and local context budget. Empty overrides inherit the global setting. Profiles are configured in Settings and saved in `~/.middleai/config.yaml`; switching a profile rebuilds the provider connection deliberately so all overrides become active together. STT and dictation polishing remain local and unchanged.
+The Standard, Management, Architecture, Coding and Research profiles can each carry a freely editable display name, an editable system prompt and optional overrides for answer provider, model, TTS voice, spoken-response mode and local context budget. The five established names remain the defaults and can be restored individually. Renaming changes only the visible label; a stable internal ID keeps existing conversations, memories, STT lexicon entries and overrides associated with the correct profile. Names must be unique and may contain up to 60 characters. Empty overrides inherit the global setting. Profiles are configured in Settings and saved in `~/.middleai/config.yaml`; switching a profile rebuilds the provider connection deliberately so all overrides become active together. STT and dictation polishing remain local and unchanged.
 
 ## TTS and privacy
 

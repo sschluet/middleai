@@ -15,11 +15,17 @@ final class MacVoiceActionExecutor: VoiceActionExecuting, @unchecked Sendable {
       try await requireState { state in state.newConversation() }
       return VoiceActionExecutionResult(message: "Neue Unterhaltung gestartet.")
     case .switchProfile:
-      guard let profile = request.profile,
-        AppConfig.supportedProfileIDs.contains(profile.lowercased())
-      else { throw VoiceActionParseError.invalidField("profile") }
-      try await requireState { state in state.selectProfile(profile.lowercased()) }
-      return VoiceActionExecutionResult(message: "Profil \(profile) ist aktiv.")
+      guard let requestedProfile = request.profile else {
+        throw VoiceActionParseError.invalidField("profile")
+      }
+      let displayName = try await requireState { state -> String in
+        guard let profileID = state.config.profileID(matching: requestedProfile) else {
+          throw VoiceActionParseError.invalidField("profile")
+        }
+        state.selectProfile(profileID)
+        return state.config.profileDisplayName(for: profileID)
+      }
+      return VoiceActionExecutionResult(message: "Profil \(displayName) ist aktiv.")
     case .copyLastAnswer:
       let copied = try await requireState { state -> Bool in
         guard !state.responseText.isEmpty else { return false }

@@ -515,10 +515,29 @@ struct SettingsView: View {
       }
 
       SettingsCard(
-        title: "System-Prompt · \(profileTitle(editingProfile))",
+        title: "Profil bearbeiten · \(profileTitle(editingProfile))",
         subtitle: profileExplanation(editingProfile),
         symbol: "text.quote"
       ) {
+        SettingsField(
+          title: "Profilname",
+          prompt: AppConfig.defaultProfileName(for: editingProfile),
+          text: profileNameBinding)
+        HStack {
+          Text(
+            "Der Name wird in MiddleAI, im Menü und bei Sprachaktionen verwendet. Die interne Zuordnung zu Gesprächen, Memory und Anbieter-Einstellungen bleibt beim Umbenennen erhalten."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          Spacer()
+          Button("Standardname") {
+            state.config.profiles.names[editingProfile] =
+              AppConfig.defaultProfileName(for: editingProfile)
+          }
+          .buttonStyle(.bordered)
+        }
+        Divider()
+        Text("System-Prompt")
+          .font(.callout.weight(.semibold))
         TextEditor(text: profilePromptBinding)
           .font(.body)
           .scrollContentBackground(.hidden)
@@ -1364,6 +1383,32 @@ struct SettingsView: View {
       }
 
       SettingsCard(
+        title: "Arbeitsprofile benennen",
+        subtitle: "Eigene Namen ohne Verlust bestehender Zuordnungen",
+        symbol: "person.text.rectangle"
+      ) {
+        HelpStep(
+          number: "1", title: "Profil auswählen",
+          detail: "Öffne Profile und wähle eines der fünf Arbeitsprofile zum Bearbeiten aus."
+        )
+        HelpStep(
+          number: "2", title: "Eigenen Namen eintragen",
+          detail:
+            "Der Name darf bis zu 60 Zeichen enthalten und muss sich von den anderen Profilnamen unterscheiden."
+        )
+        HelpStep(
+          number: "3", title: "Profile speichern",
+          detail:
+            "MiddleAI verwendet den Namen anschließend in Auswahlmenüs, Statusanzeigen und Sprachaktionen. Vorhandene Gespräche, Hinweise und Einstellungen bleiben über eine unveränderte interne ID verbunden."
+        )
+        Label(
+          "Mit „Standardname“ stellst du für das ausgewählte Profil jederzeit die ursprüngliche Bezeichnung wieder her.",
+          systemImage: "arrow.uturn.backward.circle"
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
         title: "Automatisch starten",
         subtitle: "Nach Neustart oder erneuter Anmeldung sofort bereit",
         symbol: "power"
@@ -1683,6 +1728,16 @@ struct SettingsView: View {
       })
   }
 
+  private var profileNameBinding: Binding<String> {
+    Binding(
+      get: { state.config.profiles.names[editingProfile] ?? "" },
+      set: { value in
+        let singleLine = value.replacingOccurrences(of: "\n", with: " ")
+          .replacingOccurrences(of: "\r", with: " ")
+        state.config.profiles.names[editingProfile] = String(singleLine.prefix(60))
+      })
+  }
+
   private var profileProviderBinding: Binding<String> {
     Binding(
       get: { state.config.profileOverrides(for: editingProfile).assistantProvider ?? "" },
@@ -1737,13 +1792,7 @@ struct SettingsView: View {
   }
 
   private func profileTitle(_ profile: String) -> String {
-    switch profile {
-    case "management": return "Management"
-    case "architecture": return "Architektur"
-    case "coding": return "Coding"
-    case "research": return "Recherche"
-    default: return "Standard"
-    }
+    state.config.profileDisplayName(for: profile)
   }
 
   private func profileSubtitle(_ profile: String) -> String {

@@ -379,8 +379,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       if engine?.manager.currentConversation?.profile != profile {
         _ = try engine?.manager.create(title: "Neue Unterhaltung", profile: profile)
       }
-      if announceInResponse { responseText = "Profil \(Self.profileTitle(profile)) ist aktiv." }
-      profileStatus = "Profil \(Self.profileTitle(profile)) ist aktiv"
+      let displayName = config.profileDisplayName(for: profile)
+      if announceInResponse { responseText = "Profil \(displayName) ist aktiv." }
+      profileStatus = "Profil \(displayName) ist aktiv"
       refreshConversations()
       refreshLocalContext()
       prepareTTSModel()
@@ -436,15 +437,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private static func profileTitle(_ profile: String) -> String {
-    switch profile {
-    case "management": return "Management"
-    case "architecture": return "Architektur"
-    case "coding": return "Coding"
-    case "research": return "Recherche"
-    default: return "Standard"
-    }
-  }
   func refreshConversations() {
     guard let manager = engine?.manager else {
       conversations = []
@@ -620,7 +612,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       appVersion: appVersion, operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
       architecture: ProcessInfo.processInfo.machineHardwareName,
       assistantProvider: config.resolved().assistantProviderTitle,
-      ttsProvider: config.resolved().tts.provider, activeProfile: config.activeProfile,
+      ttsProvider: config.resolved().tts.provider,
+      activeProfile: config.profileDisplayName(for: config.activeProfile),
       privateSession: isPrivateSession)
     let checks = diagnosticChecks
     let models = ttsModelStatuses.map {

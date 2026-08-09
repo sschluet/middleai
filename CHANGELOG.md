@@ -2,6 +2,15 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.8.1 — 2026-08-09
+
+### Profiles
+
+- Made all five profile display names editable while retaining their stable internal IDs.
+- Kept Standard, Management, Architecture, Coding and Research as the initial defaults and added one-click restoration of each default name.
+- Applied custom names consistently in Settings, the menu bar, the conversation window, diagnostics and confirmed voice profile switching.
+- Added migration-safe configuration defaults, length and uniqueness validation, and regression coverage for renamed profiles.
+
 ## 0.8.0 — 2026-08-09
 
 ### Fully local assistant
