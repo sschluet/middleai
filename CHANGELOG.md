@@ -2,6 +2,17 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.8.2 — 2026-08-09
+
+### Selected text service
+
+- Added the native macOS service **Mit MiddleAI bearbeiten…** for text selections exposed by other applications.
+- Added a compact local action chooser before generation and retained the existing side-by-side preview plus explicit apply boundary.
+- Bound editable Services requests to the last active application's exact Accessibility selection even when macOS activates MiddleAI before the provider callback.
+- Added a safe read-only path for selected webpage text from Safari, Edge and similar applications; proposals are copied instead of attempting to modify webpage content.
+- Kept the menu-bar selection workflow as a fallback for applications that do not expose macOS Services.
+- Added bundle-policy checks for the plain-text-only service declaration and updated in-app help, README and GitHub Pages.
+
 ## 0.8.1 — 2026-08-09
 
 ### Profiles

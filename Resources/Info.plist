@@ -8,10 +8,29 @@
   <key>CFBundleName</key><string>MiddleAI</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon.icns</string>
-  <key>CFBundleShortVersionString</key><string>0.8.1</string>
-  <key>CFBundleVersion</key><string>21</string>
+  <key>CFBundleShortVersionString</key><string>0.8.2</string>
+  <key>CFBundleVersion</key><string>22</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><false/>
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key><string>Mit MiddleAI bearbeiten…</string>
+      </dict>
+      <key>NSMessage</key><string>editSelectedText</string>
+      <key>NSPortName</key><string>MiddleAI</string>
+      <key>NSSendTypes</key>
+      <array>
+        <string>public.plain-text</string>
+        <string>public.utf8-plain-text</string>
+      </array>
+      <key>NSReturnTypes</key><array/>
+      <key>NSUserData</key><string>preview</string>
+      <key>NSTimeout</key><string>10000</string>
+    </dict>
+  </array>
   <key>NSHumanReadableCopyright</key><string>MiddleAI local-first middleware</string>
   <key>NSMicrophoneUsageDescription</key><string>MiddleAI uses the microphone for local dictation and voice questions.</string>
   <key>NSAccessibilityUsageDescription</key><string>MiddleAI inserts locally transcribed dictation into the active text field and observes the left and right Option keys.</string>

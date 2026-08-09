@@ -66,6 +66,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var profileMemories: [ProfileMemory] = []
   @Published var profileMemoryStatus = "Keine persönlichen Hinweise gespeichert"
   @Published var selectionPreview: TextTransformationResult?
+  @Published var selectionActionPending = false
+  @Published var selectionSourceApplicationName = ""
   @Published var selectionAssistantStatus = "Markiere Text in einer anderen Anwendung"
   @Published var selectionAssistantWorking = false
   @Published var profileStatus = "Profile sind bereit"
@@ -93,12 +95,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private var confirmedTTSModels = Set<String>()
   private var ttsModelFailures: [String: String] = [:]
   private var reopenObserver: NSObjectProtocol?
+  private var workspaceActivationObserver: NSObjectProtocol?
+  private var lastExternalApplication: NSRunningApplication?
   private var menuBarController: MenuBarController?
   private var builtAssistantProvider = ""
   private var ephemeralStore: InMemoryConversationStore?
   private let launchAtLoginController = LaunchAtLoginController()
   private let selectedTextService = SelectedTextService()
   private var selectedTextContext: SelectedTextContext?
+  var canReplaceSelection: Bool { selectedTextContext?.canReplace == true }
   private lazy var voiceActionDispatcher = SecureVoiceActionDispatcher(
     executor: MacVoiceActionExecutor(state: self))
   private let speechLexiconStore = try? SpeechLexiconStore(
@@ -119,6 +124,20 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       forName: .middleAIReopen, object: nil, queue: .main
     ) { [weak self] _ in
       Task { @MainActor in self?.showPrimaryWindow() }
+    }
+    workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { [weak self] notification in
+      guard
+        let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+          as? NSRunningApplication
+      else { return }
+      Task { @MainActor [weak self] in
+        self?.rememberExternalApplication(application)
+      }
+    }
+    if let application = NSWorkspace.shared.frontmostApplication {
+      rememberExternalApplication(application)
     }
     needsSetup = !FileManager.default.fileExists(atPath: ConfigLoader.defaultURL.path)
     do {
@@ -160,6 +179,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.refreshKnowledgeIndexesInBackground()
     }
     refreshTTSModelStatuses()
+    MiddleAITextServiceProvider.shared.configure { [weak self] text in
+      self?.beginTextServiceRequest(text)
+    }
     menuBarController = MenuBarController(state: self)
     Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: 350_000_000)
@@ -844,21 +866,62 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     guard !selectionAssistantWorking else { return }
     do {
       let context = try selectedTextService.capture()
-      guard config.localLLM.enabled, ["ollama", "llama_cpp"].contains(config.localLLM.provider),
-        let endpoint = URL(string: config.localLLM.url)
-      else {
-        throw MiddleAIError.configuration(
-          "Für Auswahlaktionen bitte unter Intelligenz einen lokalen Ollama- oder llama.cpp-Server auswählen."
-        )
-      }
+      selectedTextContext = context
+      selectionSourceApplicationName = context.applicationName
+      runSelectedTextAction(action)
+    } catch {
+      lastError = error.localizedDescription
+      selectionAssistantStatus = error.localizedDescription
+    }
+  }
+
+  /// Called by the macOS Services subsystem. macOS may activate MiddleAI before invoking the
+  /// provider, so capture from the last observed external application and verify the exact service
+  /// payload before retaining the target for a later, explicitly approved replacement.
+  func beginTextServiceRequest(_ serviceText: String) {
+    guard !selectionAssistantWorking else { return }
+    do {
+      _ = try validateLocalSelectionRuntime()
+      let context = try selectedTextService.captureServiceSelection(
+        serviceText, application: lastExternalApplication)
+      selectedTextContext = context
+      selectionSourceApplicationName = context.applicationName
+      selectionPreview = nil
+      selectionActionPending = true
+      selectionAssistantStatus =
+        context.canReplace
+        ? "Textfeld aus \(context.applicationName) gebunden · lokale Aktion auswählen"
+        : "Text aus \(context.applicationName) übernommen · Ergebnis kann kopiert werden"
+      showQuickInput()
+    } catch {
+      selectedTextContext = nil
+      selectionActionPending = false
+      lastError = error.localizedDescription
+      selectionAssistantStatus = error.localizedDescription
+      showQuickInput()
+    }
+  }
+
+  private func rememberExternalApplication(_ application: NSRunningApplication) {
+    guard application.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+      application.bundleIdentifier != Bundle.main.bundleIdentifier,
+      !application.isTerminated
+    else { return }
+    lastExternalApplication = application
+  }
+
+  func runSelectedTextAction(_ action: TextTransformationAction) {
+    guard !selectionAssistantWorking, let context = selectedTextContext else { return }
+    do {
+      let endpoint = try validateLocalSelectionRuntime()
       let generator = try OpenAICompatibleLocalTextGenerator(
         endpoint: endpoint, model: config.localLLM.model,
         timeout: min(120, config.localLLM.answerTimeoutSeconds))
       let assistant = TextTransformationAssistant(generator: generator)
-      selectedTextContext = context
       let selectedText = context.text
       let profilePrompt = config.profileSystemPrompt(for: config.activeProfile)
       selectionPreview = nil
+      selectionActionPending = false
       selectionAssistantWorking = true
       selectionAssistantStatus =
         "Markierter Text aus \(context.applicationName) wird lokal verarbeitet …"
@@ -876,10 +939,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
           selectionPreview = result
           selectionAssistantStatus =
             result.changed
-            ? "Lokale Vorschau bereit · erst nach deiner Freigabe wird ersetzt"
+            ? (context.canReplace
+              ? "Lokale Vorschau bereit · erst nach deiner Freigabe wird ersetzt"
+              : "Lokale Vorschau bereit · die Browserauswahl bleibt unverändert")
             : "Das lokale Modell schlägt keine Änderung vor"
         } catch {
           selectedTextContext = nil
+          selectionSourceApplicationName = ""
           lastError = error.localizedDescription
           selectionAssistantStatus = "Lokale Textaktion fehlgeschlagen"
         }
@@ -902,6 +968,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
           "Überarbeiteter Text wurde in \(selectedTextContext.applicationName) eingesetzt"
         self.selectionPreview = nil
         self.selectedTextContext = nil
+        self.selectionSourceApplicationName = ""
       } catch {
         lastError = error.localizedDescription
       }
@@ -909,10 +976,42 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  func copySelectionPreview() {
+    guard let selectionPreview else { return }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    guard pasteboard.setString(selectionPreview.transformedText, forType: .string) else {
+      lastError = "Der Vorschlag konnte nicht in die Zwischenablage kopiert werden."
+      return
+    }
+    selectionAssistantStatus = "Vorschlag kopiert · Ausgangstext blieb unverändert"
+  }
+
   func discardSelectionPreview() {
     selectionPreview = nil
     selectedTextContext = nil
+    selectionActionPending = false
+    selectionSourceApplicationName = ""
     selectionAssistantStatus = "Vorschlag verworfen · Ausgangstext blieb unverändert"
+  }
+
+  func cancelSelectionActionRequest() {
+    selectionPreview = nil
+    selectedTextContext = nil
+    selectionActionPending = false
+    selectionSourceApplicationName = ""
+    selectionAssistantStatus = "Textaktion abgebrochen · Ausgangstext blieb unverändert"
+  }
+
+  private func validateLocalSelectionRuntime() throws -> URL {
+    guard config.localLLM.enabled, ["ollama", "llama_cpp"].contains(config.localLLM.provider),
+      let endpoint = URL(string: config.localLLM.url)
+    else {
+      throw MiddleAIError.configuration(
+        "Für Auswahlaktionen bitte unter Intelligenz einen lokalen Ollama- oder llama.cpp-Server auswählen."
+      )
+    }
+    return endpoint
   }
 
   private func handleLocalVoiceAction(_ transcript: String) async throws -> InputResult? {

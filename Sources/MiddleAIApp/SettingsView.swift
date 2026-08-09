@@ -1363,7 +1363,7 @@ struct SettingsView: View {
         HelpStep(
           number: "1", title: "Markierten Text bearbeiten",
           detail:
-            "MiddleAI liest nur die aktuelle Auswahl. Zusammenfassen, Übersetzen und Umformulieren zeigen zuerst eine Vorschau; ersetzt wird erst nach deiner Bestätigung."
+            "Aktiviere den Eintrag auf diesem Mac einmal unter Systemeinstellungen > Tastatur > Tastaturkurzbefehle > Dienste > Text. Markiere danach Text und wähle im Kontextmenü „Dienste > Mit MiddleAI bearbeiten…“. In Textfeldern kann MiddleAI den bestätigten Vorschlag einsetzen; bei Webseiten aus Safari oder Edge wird er sicher kopiert."
         )
         HelpStep(
           number: "2", title: "Sprachaktionen bestätigen",

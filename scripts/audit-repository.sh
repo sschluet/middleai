@@ -45,5 +45,22 @@ grep -q -- '--hash=sha256:' Sources/MiddleAICore/Resources/tts-runtime-requireme
   exit 1
 }
 
+plutil -lint Resources/Info.plist >/dev/null
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :NSServices:0:NSMessage' Resources/Info.plist)" == \
+  "editSelectedText" ]] || {
+  print -u2 'The selected-text macOS service is missing its handler declaration.'
+  exit 1
+}
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :NSServices:0:NSSendTypes:0' Resources/Info.plist)" == \
+  "public.plain-text" ]] || {
+  print -u2 'The selected-text macOS service must accept generic plain text.'
+  exit 1
+}
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :NSServices:0:NSSendTypes:1' Resources/Info.plist)" == \
+  "public.utf8-plain-text" ]] || {
+  print -u2 'The selected-text macOS service must accept UTF-8 plain text.'
+  exit 1
+}
+
 git diff --check
 print 'Repository policy audit passed.'

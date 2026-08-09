@@ -132,7 +132,10 @@ struct QuickInputView: View {
 
         ZStack {
           ScrollView {
-            if let preview = state.selectionPreview {
+            if state.selectionActionPending {
+              SelectionActionChooserView(state: state)
+                .padding(24)
+            } else if let preview = state.selectionPreview {
               SelectionPreviewView(state: state, preview: preview)
                 .padding(24)
             } else if state.responseText.isEmpty && !state.isWorking {
@@ -235,6 +238,97 @@ struct QuickInputView: View {
   }
 }
 
+private struct SelectionActionChooserView: View {
+  @ObservedObject var state: AppState
+
+  private let choices:
+    [(title: String, subtitle: String, symbol: String, action: TextTransformationAction)] = [
+      ("Nur korrigieren", "Rechtschreibung und Grammatik", "text.badge.checkmark", .correct),
+      ("Formulierung glätten", "Füllwörter entfernen, Inhalt bewahren", "wand.and.stars", .polish),
+      (
+        "Kürzen", "Kernaussagen kompakter formulieren", "arrow.down.right.and.arrow.up.left",
+        .shorten
+      ),
+      (
+        "Ausführlicher", "Verständlicher ausformulieren", "arrow.up.left.and.arrow.down.right",
+        .expand
+      ),
+      ("Auf Deutsch", "Natürlich ins Deutsche übersetzen", "character.bubble", .translateGerman),
+      ("Auf Englisch", "Natürlich ins Englische übersetzen", "globe", .translateEnglish),
+      ("In Stichpunkte", "Als übersichtliche Liste strukturieren", "list.bullet", .bulletPoints),
+      ("Antwortentwurf", "Sachliche Antwort vorbereiten", "arrowshape.turn.up.left", .replyDraft),
+    ]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack {
+        Label("Mit MiddleAI bearbeiten", systemImage: "selection.pin.in.out")
+          .font(.title3.weight(.semibold))
+        Spacer()
+        if !state.canReplaceSelection {
+          Text("Nur Lesen")
+            .font(.caption.weight(.medium)).foregroundStyle(.orange)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Color.orange.opacity(0.10), in: Capsule())
+        }
+        Label("Lokal", systemImage: "lock.fill")
+          .font(.caption.weight(.medium)).foregroundStyle(.green)
+      }
+      Text(
+        "Die Auswahl aus \(state.selectionSourceApplicationName.isEmpty ? "der Zielanwendung" : state.selectionSourceApplicationName) wurde übernommen. Wähle aus, wie MiddleAI sie bearbeiten soll."
+      )
+      .font(.callout).foregroundStyle(.secondary)
+      LazyVGrid(
+        columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 10)], spacing: 10
+      ) {
+        ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
+          Button {
+            state.runSelectedTextAction(choice.action)
+          } label: {
+            HStack(spacing: 11) {
+              Image(systemName: choice.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28, height: 28)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+              VStack(alignment: .leading, spacing: 2) {
+                Text(choice.title).font(.callout.weight(.semibold))
+                Text(choice.subtitle).font(.caption2).foregroundStyle(.secondary)
+              }
+              Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+          }
+          .buttonStyle(.bordered)
+          .disabled(state.selectionAssistantWorking)
+        }
+      }
+      Divider()
+      HStack {
+        Button("Abbrechen") { state.cancelSelectionActionRequest() }
+          .buttonStyle(.bordered)
+        Spacer()
+        Text(
+          state.canReplaceSelection
+            ? "Der Ausgangstext bleibt bis zu deiner Bestätigung unverändert."
+            : "Nur-Lesen-Inhalt: Der Vorschlag kann nach der Verarbeitung kopiert werden."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    .padding(18)
+    .background(
+      Color(nsColor: .controlBackgroundColor).opacity(0.82),
+      in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.08))
+    }
+  }
+}
+
 private struct SelectionPreviewView: View {
   @ObservedObject var state: AppState
   let preview: TextTransformationResult
@@ -245,7 +339,8 @@ private struct SelectionPreviewView: View {
         Label("Lokale Textvorschau", systemImage: "selection.pin.in.out")
           .font(.title3.weight(.semibold))
         Spacer()
-        Text("Noch nicht eingesetzt").font(.caption.weight(.medium)).foregroundStyle(.orange)
+        Text(state.canReplaceSelection ? "Noch nicht eingesetzt" : "Nur-Lesen-Quelle")
+          .font(.caption.weight(.medium)).foregroundStyle(.orange)
           .padding(.horizontal, 9).padding(.vertical, 5)
           .background(Color.orange.opacity(0.10), in: Capsule())
       }
@@ -260,9 +355,15 @@ private struct SelectionPreviewView: View {
           .font(.caption).foregroundStyle(.orange)
       }
       HStack {
-        Button("Vorschlag einsetzen") { state.applySelectionPreview() }
-          .buttonStyle(.borderedProminent)
-          .disabled(state.selectionAssistantWorking || !preview.changed)
+        Button(state.canReplaceSelection ? "Vorschlag einsetzen" : "Vorschlag kopieren") {
+          if state.canReplaceSelection {
+            state.applySelectionPreview()
+          } else {
+            state.copySelectionPreview()
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(state.selectionAssistantWorking || !preview.changed)
         Button("Verwerfen") { state.discardSelectionPreview() }
           .buttonStyle(.bordered)
         Spacer()

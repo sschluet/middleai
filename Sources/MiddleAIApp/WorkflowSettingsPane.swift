@@ -16,22 +16,17 @@ struct WorkflowSettingsPane: View {
         LazyVGrid(
           columns: [GridItem(.adaptive(minimum: 150, maximum: 230), spacing: 9)], spacing: 9
         ) {
-          SelectionActionButton(
-            "Nur korrigieren", symbol: "text.badge.checkmark", action: .correct, state: state)
-          SelectionActionButton(
-            "Formulierung glätten", symbol: "wand.and.stars", action: .polish, state: state)
-          SelectionActionButton(
-            "Kürzen", symbol: "arrow.down.right.and.arrow.up.left", action: .shorten, state: state)
-          SelectionActionButton(
-            "In Stichpunkte", symbol: "list.bullet", action: .bulletPoints, state: state)
-          SelectionActionButton(
-            "Auf Deutsch", symbol: "character.bubble", action: .translateGerman, state: state)
-          SelectionActionButton(
-            "Auf Englisch", symbol: "globe", action: .translateEnglish, state: state)
+          SelectionCapabilityLabel("Korrigieren", symbol: "text.badge.checkmark")
+          SelectionCapabilityLabel("Formulierung glätten", symbol: "wand.and.stars")
+          SelectionCapabilityLabel(
+            "Kürzen oder erweitern", symbol: "arrow.up.left.and.arrow.down.right")
+          SelectionCapabilityLabel("In Stichpunkte", symbol: "list.bullet")
+          SelectionCapabilityLabel("Deutsch oder Englisch", symbol: "character.bubble")
+          SelectionCapabilityLabel("Antwortentwurf", symbol: "arrowshape.turn.up.left")
         }
         Text(state.selectionAssistantStatus).font(.caption).foregroundStyle(.secondary)
         Text(
-          "Markiere zuerst Text in einer anderen Anwendung und öffne danach das MiddleAI-Menü. Nur diese Auswahl wird an den konfigurierten lokalen Ollama- oder llama.cpp-Server übergeben. Vor dem Ersetzen zeigt MiddleAI Original und Vorschlag nebeneinander."
+          "Markiere Text in einer anderen Anwendung und wähle im Kontextmenü „Dienste > Mit MiddleAI bearbeiten…“. Alternativ bleibt „Markierten Text lokal bearbeiten“ im MiddleAI-Menü verfügbar. Nur diese Auswahl wird an den lokalen Ollama- oder llama.cpp-Server übergeben. In editierbaren Feldern kann MiddleAI den bestätigten Vorschlag einsetzen; bei Nur-Lesen-Inhalten aus Safari oder Edge wird er kopiert."
         )
         .font(.caption2).foregroundStyle(.secondary)
       }
@@ -118,29 +113,21 @@ struct WorkflowSettingsPane: View {
   }
 }
 
-private struct SelectionActionButton: View {
+private struct SelectionCapabilityLabel: View {
   let title: String
   let symbol: String
-  let action: TextTransformationAction
-  @ObservedObject var state: AppState
 
-  init(
-    _ title: String, symbol: String, action: TextTransformationAction, state: AppState
-  ) {
+  init(_ title: String, symbol: String) {
     self.title = title
     self.symbol = symbol
-    self.action = action
-    self.state = state
   }
 
   var body: some View {
-    Button {
-      state.previewSelectedText(action: action)
-    } label: {
-      Label(title, systemImage: symbol).frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .buttonStyle(.bordered)
-    .disabled(state.selectionAssistantWorking)
+    Label(title, systemImage: symbol)
+      .font(.callout)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 11).padding(.vertical, 9)
+      .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
   }
 }
 
