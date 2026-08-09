@@ -42,6 +42,7 @@ let package = Package(
       linkerSettings: [
         .linkedFramework("AudioToolbox"),
         .linkedFramework("CoreAudio"),
+        .linkedFramework("ServiceManagement"),
       ]
     ),
     .executableTarget(name: "MiddleAITestRunner", dependencies: ["MiddleAICore"]),

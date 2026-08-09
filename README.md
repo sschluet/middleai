@@ -24,6 +24,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 ## What is included
 
 - Native SwiftUI menu-bar app with first-run settings, a searchable MiddleAI conversation window, status, profiles and current-chat link
+- Native launch-at-login support with a live macOS registration status and direct access to Login Items settings
 - Independently configurable single-press or intentional double-tap handling for the left and right Option keys
 - Local Parakeet TDT v3 multilingual speech recognition through FluidAudio and Core ML
 - Native 258-point island that overlaps the MacBook camera notch seamlessly, with rounded top and bottom transitions, macOS-sized typography, target-app icon and seven-bar level meter
@@ -124,8 +125,11 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 4. Keep TLS verification enabled. Add a company CA PEM/DER path when required.
 5. Select **Save & Test Connection**.
 6. Allow MiddleAI under **Privacy & Security** for Microphone and Accessibility. Restart MiddleAI if macOS asks for it.
-7. Double-tap left Option, speak and tap it once to insert dictation into the active field.
-8. Double-tap right Option to ask the configured provider. MiddleAI displays and speaks the response. One press cancels transcription, provider work or speech that is already running.
+7. Under **Settings → General**, keep **Launch MiddleAI automatically with macOS** enabled. If macOS requests confirmation, allow MiddleAI under **General → Login Items & Extensions**.
+8. Double-tap left Option, speak and tap it once to insert dictation into the active field.
+9. Double-tap right Option to ask the configured provider. MiddleAI displays and speaks the response. One press cancels transcription, provider work or speech that is already running.
+
+MiddleAI uses Apple's ServiceManagement framework for launch-at-login registration. New and existing installations enable it by default and remember a later opt-out. The app launches after the user signs in, remains in the menu bar and does not open its main window automatically. For a stable registration, keep `MiddleAI.app` in `/Applications`; moving or renaming the bundle can require registering it again.
 
 For OpenWebUI, select either username/password or API-key authentication explicitly. The username field is used only for password login; both secret types are stored in a Keychain scope derived from the server and active profile. This lets an entered replacement secret be tested without exposing or overwriting another server's credential.
 

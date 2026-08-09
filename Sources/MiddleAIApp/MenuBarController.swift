@@ -114,7 +114,7 @@ final class MenuBarController: NSObject {
   }
 
   @objc private func showQuickInput() { state?.showQuickInput() }
-  @objc private func showSetup() { state?.showSetupWindow() }
+  @objc private func showSetup() { state?.showSetupWindow(initialPane: .general) }
   @objc private func showHelp() { state?.showHelpWindow() }
   @objc private func startNewConversation() { state?.startNewConversation() }
   @objc private func stopSpeaking() { state?.stopSpeaking() }

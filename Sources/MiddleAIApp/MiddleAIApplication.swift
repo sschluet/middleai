@@ -27,7 +27,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @StateObject private var state = AppState()
   var body: some Scene {
-    Settings { SettingsView(state: state).frame(minWidth: 860, minHeight: 660) }
+    Settings {
+      SettingsView(state: state, initialPane: .general).frame(minWidth: 860, minHeight: 660)
+    }
   }
 }
 
@@ -59,6 +61,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var diagnosticChecks: [DiagnosticCheck] = []
   @Published var diagnosticsRunning = false
   @Published var isPrivateSession = false
+  @Published var launchAtLoginEnabled = true
+  @Published var launchAtLoginState: LaunchAtLoginRegistrationState = .checking
+  @Published var launchAtLoginStatus = "Autostart wird geprüft"
   let credentials = CompositeCredentialStore()
   private(set) var engine: MiddleAIEngine?
   private var server: LocalInputServer?
@@ -77,7 +82,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private var menuBarController: MenuBarController?
   private var builtAssistantProvider = ""
   private var ephemeralStore: InMemoryConversationStore?
+  private let launchAtLoginController = LaunchAtLoginController()
   init() {
+    let defaults = UserDefaults.standard
+    if defaults.object(forKey: LaunchAtLoginController.preferenceKey) == nil {
+      defaults.set(true, forKey: LaunchAtLoginController.preferenceKey)
+    }
+    launchAtLoginEnabled = defaults.bool(forKey: LaunchAtLoginController.preferenceKey)
     reopenObserver = NotificationCenter.default.addObserver(
       forName: .middleAIReopen, object: nil, queue: .main
     ) { [weak self] _ in
@@ -120,8 +131,44 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     menuBarController = MenuBarController(state: self)
     Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: 350_000_000)
+      self?.applyLaunchAtLoginPreference()
       if self?.needsSetup == true { self?.showSetupWindow() }
     }
+  }
+
+  var launchAtLoginInstalledInApplications: Bool {
+    launchAtLoginController.isInstalledInApplications
+  }
+
+  func setLaunchAtLogin(_ enabled: Bool) {
+    launchAtLoginEnabled = enabled
+    UserDefaults.standard.set(enabled, forKey: LaunchAtLoginController.preferenceKey)
+    applyLaunchAtLoginPreference()
+  }
+
+  func refreshLaunchAtLoginStatus() {
+    applyLaunchAtLoginSnapshot(
+      launchAtLoginController.snapshot(preferenceEnabled: launchAtLoginEnabled))
+  }
+
+  func openLoginItemsSettings() {
+    guard
+      let url = URL(
+        string:
+          "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+      )
+    else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  private func applyLaunchAtLoginPreference() {
+    applyLaunchAtLoginSnapshot(
+      launchAtLoginController.reconcile(enabled: launchAtLoginEnabled))
+  }
+
+  private func applyLaunchAtLoginSnapshot(_ snapshot: LaunchAtLoginSnapshot) {
+    launchAtLoginState = snapshot.state
+    launchAtLoginStatus = snapshot.message
   }
   private func configureVoice() {
     voiceController = VoiceInputController(

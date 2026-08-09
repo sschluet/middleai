@@ -2,6 +2,15 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.7.0 — 2026-08-09
+
+### macOS integration
+
+- Added native launch-at-login registration through Apple's ServiceManagement framework.
+- Enabled launch at login by default for existing and new installations, with a persistent user-controlled toggle.
+- Added live enabled, disabled, approval-required and unavailable states plus a direct link to macOS Login Items settings.
+- Kept automatic launches unobtrusive: MiddleAI starts in the menu bar without opening its main window.
+
 ## 0.6.1 — 2026-08-05
 
 ### Menu bar

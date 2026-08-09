@@ -4,6 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
+  case general
   case connection
   case profiles
   case devices
@@ -16,6 +17,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var title: String {
     switch self {
+    case .general: return "Allgemein"
     case .connection: return "Verbindung"
     case .profiles: return "Profile"
     case .devices: return "Geräte"
@@ -28,6 +30,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   }
   var subtitle: String {
     switch self {
+    case .general: return "Autostart und App-Verhalten"
     case .connection: return "KI-Anbieter und Modell"
     case .profiles: return "System-Prompts und Arbeitsmodi"
     case .devices: return "Mikrofon und Lautsprecher"
@@ -40,6 +43,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   }
   var symbol: String {
     switch self {
+    case .general: return "gearshape"
     case .connection: return "network"
     case .profiles: return "person.crop.rectangle.stack"
     case .devices: return "hifispeaker.2"
@@ -121,6 +125,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
           paneHeader
           switch selected ?? .connection {
+          case .general: generalPane
           case .connection: connectionPane
           case .profiles: profilesPane
           case .devices: devicesPane
@@ -143,6 +148,82 @@ struct SettingsView: View {
           ], startPoint: .top, endPoint: .bottom))
     }
     .navigationSplitViewStyle(.balanced)
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    {
+      _ in
+      state.refreshLaunchAtLoginStatus()
+    }
+  }
+
+  private var generalPane: some View {
+    VStack(spacing: 16) {
+      SettingsCard(
+        title: "Beim Anmelden starten",
+        subtitle: "MiddleAI ist nach einem Neustart automatisch bereit",
+        symbol: "power"
+      ) {
+        Toggle(
+          "MiddleAI automatisch mit macOS starten",
+          isOn: Binding(
+            get: { state.launchAtLoginEnabled },
+            set: { state.setLaunchAtLogin($0) }))
+        Label(state.launchAtLoginStatus, systemImage: launchAtLoginStatusSymbol)
+          .font(.caption)
+          .foregroundStyle(launchAtLoginStatusColor)
+        Text(
+          "macOS öffnet MiddleAI nach der Anmeldung an deinem Benutzerkonto im Hintergrund. Das Menüleistensymbol und beide Aktivierungstasten sind danach direkt verfügbar; ein Hauptfenster wird nicht ungefragt eingeblendet."
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+        if !state.launchAtLoginInstalledInApplications {
+          Label(
+            "Für einen dauerhaft zuverlässigen Autostart sollte MiddleAI.app im Ordner Programme liegen.",
+            systemImage: "exclamationmark.triangle.fill"
+          )
+          .font(.caption).foregroundStyle(.orange)
+        }
+        HStack {
+          Button("Anmeldeobjekte öffnen") { state.openLoginItemsSettings() }
+          Button("Status aktualisieren") { state.refreshLaunchAtLoginStatus() }
+          Spacer()
+        }
+      }
+
+      SettingsCard(
+        title: "Startverhalten",
+        subtitle: "Unaufdringlich im Hintergrund, sofort per Stimme verfügbar",
+        symbol: "menubar.rectangle"
+      ) {
+        Label(
+          "Beim automatischen Start erscheint MiddleAI nur in der macOS-Menüleiste.",
+          systemImage: "menubar.arrow.up.rectangle")
+        Label(
+          "Das Hauptfenster öffnet sich erst über „MiddleAI öffnen…“ oder einen Doppelklick auf das Menüleistensymbol.",
+          systemImage: "macwindow")
+        Label(
+          "Falls macOS den Start blockiert, zeigt der Status oben die noch erforderliche Freigabe an.",
+          systemImage: "checkmark.shield")
+      }
+    }
+    .onAppear { state.refreshLaunchAtLoginStatus() }
+  }
+
+  private var launchAtLoginStatusSymbol: String {
+    switch state.launchAtLoginState {
+    case .checking: return "clock"
+    case .enabled: return "checkmark.circle.fill"
+    case .disabled: return "minus.circle"
+    case .requiresApproval: return "exclamationmark.triangle.fill"
+    case .unavailable: return "xmark.circle.fill"
+    }
+  }
+
+  private var launchAtLoginStatusColor: Color {
+    switch state.launchAtLoginState {
+    case .enabled: return .green
+    case .requiresApproval: return .orange
+    case .unavailable: return .red
+    case .checking, .disabled: return .secondary
+    }
   }
 
   private var paneHeader: some View {
@@ -1068,6 +1149,33 @@ struct SettingsView: View {
         Label(
           "Ein ChatGPT-Abonnement ist getrennt von der nutzungsbasierten OpenAI Platform API. Bei OpenRouter gelten die Preise und Datenschutzregeln der dort gewählten Modellroute.",
           systemImage: "info.circle"
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: "Automatisch starten",
+        subtitle: "Nach Neustart oder erneuter Anmeldung sofort bereit",
+        symbol: "power"
+      ) {
+        HelpStep(
+          number: "1", title: "MiddleAI nach Programme verschieben",
+          detail:
+            "Ein fester Ort unter /Applications verhindert, dass der registrierte App-Pfad später ungültig wird."
+        )
+        HelpStep(
+          number: "2", title: "Autostart unter Allgemein einschalten",
+          detail:
+            "MiddleAI registriert die Haupt-App mit Apples ServiceManagement-Schnittstelle als Anmeldeobjekt."
+        )
+        HelpStep(
+          number: "3", title: "Freigabe prüfen",
+          detail:
+            "Falls macOS eine Bestätigung verlangt, öffne dort direkt „Anmeldeobjekte“ und erlaube MiddleAI."
+        )
+        Label(
+          "Der Start erfolgt nach der Anmeldung am Benutzerkonto. MiddleAI bleibt zunächst in der Menüleiste und öffnet kein Hauptfenster.",
+          systemImage: "menubar.rectangle"
         )
         .font(.caption).foregroundStyle(.secondary)
       }
