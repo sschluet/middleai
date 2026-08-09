@@ -8,12 +8,18 @@ Right Option / CLI / synchronous HTTP / Quick Input
   -> ConversationManager
   -> HybridRouter (Heuristic + local vector + optional local LLM)
   -> AssistantRequestCoordinator (FIFO + explicit cancellation)
-  -> selected AssistantClient (OpenWebUI / OpenAI / OpenRouter)
+  -> optional explicit local knowledge + profile-memory context
+  -> selected AssistantClient (MiddleAI Local / OpenWebUI / OpenAI / OpenRouter)
   -> bounded context window -> SSE token stream / background-task polling
   -> spoken-response summarizer -> TTSQueue
   -> selected local engine (Qwen3-TTS / Supertonic / Voxtral / Apple voice)
   -> validated local audio cache -> local playback with watchdog and immediate barge-in
 ```
+
+Strict-offline construction permits only the local client or a loopback OpenWebUI. Local URL
+sessions reject redirects to non-loopback hosts. Knowledge and personal-memory context are injected
+only when the resolved answer scope is loopback, so a hosted provider cannot receive the local
+context by configuration accident.
 
 The native Voice path starts before the engine:
 
@@ -64,6 +70,13 @@ older history locally and enforces the configured token budget. User and assista
 conversation metadata are committed atomically. The local routing copy has a configurable retention
 period.
 
+A separate owner-only `local-context.sqlite` holds explicitly granted knowledge sources, indexed
+chunks and explicit profile memories. `LocalKnowledgeBase` has no discovery API: the application
+must pass a user-selected URL through `KnowledgePathPolicy`. Broad roots, hidden paths, symlinks,
+credentials, databases and mail/browser stores are rejected. Retrieval is local and citations keep
+the source path plus line range. `ProfileMemoryService` exposes explicit CRUD and expiry only; it
+never observes conversations.
+
 Private mode substitutes an in-memory conversation store for SQLite. Enabling, disabling or
 switching an effective profile creates a fresh conversation boundary so context cannot accidentally
 cross persistence modes, providers, models or system prompts. Remote providers may still retain the
@@ -107,3 +120,27 @@ idle state rather than network completion. Renderer and player watchdogs turn mi
 bounded errors, and cancellation never enters a fallback voice. Synthesized WAV files use hashed
 names, validation before reuse, owner-only permissions and configurable LRU eviction. Pronunciation
 substitutions are applied locally before synthesis.
+
+## Local workload coordination and actions
+
+`InferenceScheduler` serializes memory-intensive STT, local generation, TTS, embeddings and
+background indexing by priority. Interactive voice work is admitted before queued maintenance. The
+local answer client, router and spoken summarizer share this scheduler and use bounded timeouts plus
+circuit breakers. Ollama and llama.cpp remain out-of-process loopback services; redirect filtering
+keeps their trust boundary local.
+
+Selected-text transformations capture only `kAXSelectedTextAttribute`, reject secure fields and
+produce a preview before `kAXSelectedTextAttribute` is set. The transformation model is loopback
+only, treats the selection as untrusted data and validates conservative edits for similarity and
+preserved numbers.
+
+Voice actions use a closed `VoiceActionKind` enum. Unknown JSON fields are rejected, and platform
+executors see only validated typed requests. Side effects use short-lived, request-bound, single-use
+confirmation tokens. The macOS executor currently supports reminders through EventKit after a
+visible confirmation; arbitrary URLs and shell commands are not representable.
+
+The adaptive STT layer runs after Parakeet. It only applies user-approved lexicon entries and is a
+complete no-op with an empty store. The local meeting coordinator has an explicit start/stop/cancel
+lifecycle, bounded microphone capture, local transcription and deterministic Markdown/JSON export.
+Its core audio-source protocol can represent system audio, but the shipping UI deliberately uses the
+selected microphone and requests no Screen Recording permission.

@@ -9,7 +9,7 @@
 
 **Website:** [sschluet.github.io/middleai](https://sschluet.github.io/middleai/)
 
-MiddleAI is a local-first macOS voice layer for dictation and spoken AI requests. It recognizes speech locally, selects the appropriate conversation automatically, streams answers from your own OpenWebUI, the OpenAI Platform or OpenRouter, and speaks complete sentences locally on the Mac.
+MiddleAI is a local-first macOS voice layer for dictation and spoken AI requests. It recognizes speech locally, selects the appropriate conversation automatically, can answer entirely on the Mac through Ollama or llama.cpp, optionally connects to OpenWebUI, the OpenAI Platform or OpenRouter, and speaks complete sentences locally.
 
 By default, double-tap the left Option key to start dictation and tap it once to finish. Double-tap the right Option key for spoken requests to the configured AI provider. Single-press activation can be restored independently for either mode in Settings. A focus-free overlay directly below the MacBook notch shows recording, transcription and response status.
 
@@ -37,13 +37,22 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 - SQLite conversation/message cache plus persistent, editable profile system prompts
 - `HeuristicRouter`, `EmbeddingRouter`, `LLMRouter` and default `HybridRouter`
 - Password and API-key auth providers; passwords/tokens live in macOS Keychain
-- Selectable answer provider: OpenWebUI, OpenAI Platform or OpenRouter
+- Selectable answer provider: MiddleAI Lokal, OpenWebUI, OpenAI Platform or OpenRouter
+- Fully local answer provider for an Ollama or llama.cpp loopback server, with streaming and conversation continuity
+- Enforced strict-offline mode that blocks hosted providers, non-loopback endpoints and remote redirects
 - Model discovery after authentication and streaming responses for all providers
 - API keys and passwords stored only in macOS Keychain
 - OpenWebUI adapter with TLS validation, optional private CA and server-side chat persistence
 - Dedicated Devices settings with macOS-default or fixed microphone and speaker routing
 - Supertonic 3 multilingual TTS with native Core ML inference, automatic German/English pronunciation, spoken German number normalization, five female voices, 44.1-kHz audio, local macOS fallback and immediate barge-in
 - Structured privacy-safe logging, in-app diagnostics, redacted support export and `middleai doctor`
+- Explicit local knowledge sources with safe-path validation, incremental reindexing, local citations and no whole-disk discovery
+- Profile-scoped personal memory that is only created, edited or deleted by the user
+- Local selected-text transformations with before/after preview and explicit apply
+- Allow-listed local voice actions; side effects such as reminders require visible confirmation
+- User-approved global, profile and application-specific STT correction lexicon plus local quality metrics
+- Explicit microphone meeting capture with local transcription, summary, decisions, tasks and Markdown/JSON archive
+- Shared priority-aware inference scheduler and a device-specific local model benchmark
 
 ## Install and build
 
@@ -55,7 +64,7 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 | macOS | macOS 14 Sonoma | Current macOS release |
 | Memory | 8 GB for dictation and Supertonic | 16 GB for Qwen3-TTS, 24 GB for Voxtral or heavy multitasking |
 | Free disk space | 5 GB for one compact voice setup | 12–15 GB for all current models, downloads and temporary files |
-| Network | Required for initial model downloads and the selected answer provider | Stable broadband connection for first setup |
+| Network | Required for initial model downloads; optional afterward with a local answer provider | Stable broadband connection for first setup |
 
 The distributed app is currently arm64-only and does not run on Intel Macs. Apple Intelligence based dictation polishing and spoken-response summaries require macOS 26, Apple Intelligence and an eligible Mac. On macOS 14 and later, MiddleAI remains usable and falls back to conservative local text cleanup and extractive summaries.
 
@@ -86,6 +95,36 @@ The Hybrid strategy first compares recency, wording and local text similarity. I
 
 For Ollama or llama.cpp, the configured model ID or alias must be known to the server. A successful connection test with an empty `/v1/models` response means the server is reachable, but no model is currently advertised. Only the current input and the titles and summaries of up to eight recent local conversations are sent to this loopback service.
 
+### Fully local answers and strict offline mode
+
+Choose **MiddleAI Lokal** under Settings → Connection to use the configured Ollama or llama.cpp server for the complete answer, not only for routing. MiddleAI uses the loopback-only `/v1/models` and `/v1/chat/completions` interface, streams the answer and keeps conversation history in its permission-protected SQLite store. The local model can therefore continue earlier turns without a hosted provider.
+
+The **Strict offline** switch is an enforced network boundary. It accepts only `localhost`, `127.0.0.1` or `::1`, blocks hosted answer providers before their client is created and refuses redirects from a local service to a remote host. A loopback OpenWebUI remains permitted. Enabling the switch automatically changes to MiddleAI Lokal when the current provider is remote.
+
+The local benchmark sends one short, non-persistent request to the selected model and reports time to first token, estimated output speed, RAM, available disk, CPU, thermal state and the model-size class recommended for that Mac. It is a practical compatibility measurement, not a synthetic hardware score.
+
+### Local knowledge and personal memory
+
+Settings → Local Knowledge accepts only a file or concrete subfolder that the user explicitly grants. Supported files are UTF-8 or Latin-1 text, Markdown, CSV/TSV, JSON, YAML and HTML. Hidden files, symbolic links, credential stores, mail/message databases, key material, broad roots and files larger than 8 MB are rejected. Packages and hidden descendants are skipped. Enabled sources are reindexed locally after startup and can be disabled, refreshed or revoked individually; revocation deletes their indexed chunks.
+
+Retrieval is lexical and local. Results carry the source filename and line range. Knowledge excerpts and personal profile memories are injected only when the selected answer endpoint is on this Mac. OpenAI, OpenRouter and remote OpenWebUI servers never receive this local context.
+
+Personal memory is explicit CRUD rather than passive learning. Each entry belongs to one profile, may have an expiry date and remains visible and individually deletable. MiddleAI exposes no API that silently learns a memory from conversations.
+
+### Selected text and safe local actions
+
+Use the menu-bar submenu **Edit selected text locally** after selecting text in another app. MiddleAI reads only the explicit accessibility selection, rejects secure fields and limits one transformation to 50,000 characters. Correction, polishing, shortening, expansion, translation, bullets and reply drafting run through the configured local Ollama or llama.cpp model. The main window shows original and proposal side by side; replacement happens only after **Apply proposal**. Correction and polishing are rejected when the local result diverges too far from the source.
+
+The assistant key also recognizes a closed set of deterministic local commands such as creating a new conversation, switching a profile, copying the last answer, summarizing the selection and creating a reminder. Structured model output is validated against the same allow-list and rejects unknown fields, URLs and commands. A reminder receives a short-lived, single-use authorization and a visible confirmation dialog before EventKit is called. No voice action can execute shell code.
+
+### Adaptive STT and local meetings
+
+The Speech Input settings contain an explicit correction lexicon. A user-approved mapping can be global or scoped to the active profile; the longest and most specific match wins. It is applied only after Parakeet transcription, so an empty dictionary is a complete no-op. The file is stored locally with owner-only permissions. Signal, density and confidence metrics contain no spoken content. Core APIs for reproducible engine comparisons calculate real-time factor and word error rate without changing the default engine automatically.
+
+Start a meeting recording from Settings → Workflows or the menu bar. Recording never starts in the background. The current implementation records the selected microphone as one bounded local session, transcribes it with the same local STT stack, extracts an overview, decisions and action items, then writes owner-only JSON and Markdown files below `~/.middleai/meetings`. Stop finalizes the recording; Cancel discards it. The core capture interface also models system-audio capability without requesting Screen Recording permission implicitly; the shipping UI currently records the selected microphone only.
+
+All STT, local LLM, TTS, embedding and background-indexing operations share a priority-aware inference scheduler. Interactive recording and generation are admitted before queued background indexing, avoiding simultaneous multi-model pressure on unified memory. Ollama and llama.cpp remain separate processes, so a local answer-runtime failure cannot terminate the menu-bar app.
+
 ### Copying MiddleAI to another Mac
 
 `MiddleAI.app` contains the native application and its Swift dependencies. Copying only the app to `/Applications` on another Apple Silicon Mac is sufficient to start setup; Xcode, Homebrew and a separately installed Python are not required. Qwen3-TTS and Voxtral bootstrap their own managed Python/MLX runtime under `~/.middleai/runtime`.
@@ -102,7 +141,7 @@ The following data deliberately does not travel inside the app and must be confi
 - Activation keys and user preferences under `~/.middleai`
 - STT and TTS model caches
 
-After the initial downloads, speech recognition and speech synthesis work offline. Assistant requests still require access to the configured OpenWebUI, OpenAI or OpenRouter endpoint.
+After the initial downloads, speech recognition and speech synthesis work offline. Assistant requests can also work offline when MiddleAI Lokal or a loopback OpenWebUI is selected and the corresponding service is running.
 
 ### Local model storage
 
@@ -121,7 +160,7 @@ Sizes are rounded and can change with upstream model revisions. Old model versio
 
 1. Open `dist/MiddleAI.app`; MiddleAI appears in the menu bar.
 2. Open **Settings**.
-3. Choose OpenWebUI, OpenAI Platform or OpenRouter. Enter the required password or API key, then use **Authenticate and load models** to select a model returned by the provider.
+3. Choose MiddleAI Lokal, OpenWebUI, OpenAI Platform or OpenRouter. Start the local Ollama/llama.cpp service or enter the required password/API key, then load and select a model returned by that provider.
 4. Keep TLS verification enabled. Add a company CA PEM/DER path when required.
 5. Select **Save & Test Connection**.
 6. Allow MiddleAI under **Privacy & Security** for Microphone and Accessibility. Restart MiddleAI if macOS asks for it.

@@ -11,6 +11,8 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   case speech
   case voice
   case intelligence
+  case knowledge
+  case workflows
   case diagnostics
   case help
 
@@ -24,6 +26,8 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .speech: return "Sprachausgabe"
     case .voice: return "Spracheingabe"
     case .intelligence: return "Intelligenz"
+    case .knowledge: return "Lokales Wissen"
+    case .workflows: return "Arbeitsabläufe"
     case .diagnostics: return "Diagnose"
     case .help: return "Hilfe"
     }
@@ -37,6 +41,8 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .speech: return "Stimmen und Kurzfassungen"
     case .voice: return "Aktivierungstasten und Diktat"
     case .intelligence: return "Routing und lokale Modelle"
+    case .knowledge: return "Quellen und persönliche Hinweise"
+    case .workflows: return "Auswahl, Aktionen und Besprechungen"
     case .diagnostics: return "Berechtigungen und Systemstatus"
     case .help: return "Installation und Anforderungen"
     }
@@ -50,6 +56,8 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .speech: return "speaker.wave.3"
     case .voice: return "waveform.and.mic"
     case .intelligence: return "brain.head.profile"
+    case .knowledge: return "books.vertical"
+    case .workflows: return "wand.and.rays"
     case .diagnostics: return "stethoscope"
     case .help: return "questionmark.circle"
     }
@@ -68,6 +76,9 @@ struct SettingsView: View {
   @State private var audioOutputDevices = AudioOutputDeviceCatalog.availableDevices()
   @State private var editingProfile = "default"
   @State private var pronunciationDraft: String
+  @State private var speechLexiconSpoken = ""
+  @State private var speechLexiconWritten = ""
+  @State private var speechLexiconProfileScoped = true
 
   init(state: AppState, initialPane: MiddleAISettingsPane = .connection) {
     self.state = state
@@ -132,6 +143,8 @@ struct SettingsView: View {
           case .speech: speechPane
           case .voice: voicePane
           case .intelligence: intelligencePane
+          case .knowledge: LocalKnowledgeSettingsPane(state: state)
+          case .workflows: workflowsPane
           case .diagnostics: DiagnosticsPane(state: state)
           case .help: helpPane
           }
@@ -281,6 +294,10 @@ struct SettingsView: View {
             title: "OpenRouter", subtitle: "Modell-Router", symbol: "arrow.triangle.branch",
             selected: state.config.assistant.provider == "openrouter"
           ) { selectAssistantProvider("openrouter") }
+          ProviderSelectionCard(
+            title: "MiddleAI Lokal", subtitle: "Ollama oder llama.cpp", symbol: "desktopcomputer",
+            selected: state.config.assistant.provider == "local"
+          ) { selectAssistantProvider("local") }
         }
         Text(answerProviderDescription).font(.caption).foregroundStyle(.secondary)
         Label(
@@ -293,8 +310,12 @@ struct SettingsView: View {
       SettingsCard(
         title: state.config.assistantProviderTitle,
         subtitle: state.config.assistant.provider == "openwebui"
-          ? "Server und Anmeldung" : "API-Zugriff und Modell",
-        symbol: state.config.assistant.provider == "openwebui" ? "server.rack" : "key"
+          ? "Server und Anmeldung"
+          : (state.config.assistant.provider == "local"
+            ? "Lokaler Server und Modell" : "API-Zugriff und Modell"),
+        symbol: state.config.assistant.provider == "local"
+          ? "desktopcomputer"
+          : (state.config.assistant.provider == "openwebui" ? "server.rack" : "key")
       ) {
         if state.config.assistant.provider == "openwebui" {
           SettingsField(
@@ -309,21 +330,47 @@ struct SettingsView: View {
               title: "Benutzer", prompt: "name@firma.de", text: $state.config.openwebui.username)
           }
         }
-        HStack(alignment: .firstTextBaseline, spacing: 18) {
-          Text(providerSecretTitle)
-            .frame(width: 112, alignment: .leading).foregroundStyle(.secondary)
-          SecureField("Unverändert lassen oder neu eingeben", text: $password)
-            .textFieldStyle(.roundedBorder)
+        if state.config.assistant.provider == "local" {
+          Picker("Lokale Laufzeit", selection: $state.config.localLLM.provider) {
+            Text("Ollama").tag("ollama")
+            Text("llama.cpp").tag("llama_cpp")
+          }
+          .pickerStyle(.menu)
+          SettingsField(
+            title: "Server", prompt: "http://127.0.0.1:11434",
+            text: $state.config.localLLM.url)
+          HStack {
+            Stepper(
+              "Kontextbudget: \(state.config.localLLM.contextTokenBudget.formatted()) Token",
+              value: $state.config.localLLM.contextTokenBudget, in: 512...1_000_000, step: 2_048)
+            Spacer()
+          }
+          Label(
+            "MiddleAI akzeptiert hier ausschließlich Loopback-Adressen. Gespräch, Antwort und Modellverarbeitung bleiben auf diesem Mac.",
+            systemImage: "lock.shield.fill"
+          )
+          .font(.caption).foregroundStyle(.green)
+        } else {
+          HStack(alignment: .firstTextBaseline, spacing: 18) {
+            Text(providerSecretTitle)
+              .frame(width: 112, alignment: .leading).foregroundStyle(.secondary)
+            SecureField("Unverändert lassen oder neu eingeben", text: $password)
+              .textFieldStyle(.roundedBorder)
+          }
+          Text(
+            "Das Geheimnis wird ausschließlich im macOS-Schlüsselbund gespeichert und nie in die Konfigurationsdatei geschrieben."
+          )
+          .font(.caption2).foregroundStyle(.secondary)
         }
-        Text(
-          "Das Geheimnis wird ausschließlich im macOS-Schlüsselbund gespeichert und nie in die Konfigurationsdatei geschrieben."
-        )
-        .font(.caption2).foregroundStyle(.secondary)
         HStack {
           Button {
             Task { await state.loadProviderModels(secret: password) }
           } label: {
-            Label("Authentifizieren und Modelle laden", systemImage: "arrow.down.circle")
+            Label(
+              state.config.assistant.provider == "local"
+                ? "Lokalen Server prüfen und Modelle laden"
+                : "Authentifizieren und Modelle laden",
+              systemImage: "arrow.down.circle")
           }
           .buttonStyle(.bordered)
           Text(state.providerModelStatus).font(.caption).foregroundStyle(.secondary)
@@ -345,7 +392,7 @@ struct SettingsView: View {
             text: Binding(
               get: { state.config.openwebui.caFile ?? "" },
               set: { state.config.openwebui.caFile = $0.isEmpty ? nil : $0 }))
-        } else {
+        } else if state.config.assistant.provider != "local" {
           HStack {
             Stepper(
               "Verlaufsbudget: \(hostedContextBudgetBinding.wrappedValue.formatted()) Token",
@@ -361,6 +408,49 @@ struct SettingsView: View {
             systemImage: "info.circle"
           )
           .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+
+      SettingsCard(
+        title: "Lokaler Datenschutzmodus",
+        subtitle: "Auf Wunsch technisch ohne entfernte Anbieter arbeiten",
+        symbol: "network.slash"
+      ) {
+        Toggle(
+          "Strikt offline · nur Loopback-Verbindungen erlauben",
+          isOn: Binding(
+            get: { state.config.privacy.strictOffline },
+            set: { state.setStrictOffline($0) }))
+        Text(
+          "Die Sperre wird in der Provider-Schicht durchgesetzt. OpenAI, OpenRouter, entfernte OpenWebUI-Server und Weiterleitungen auf externe Hosts werden blockiert. Beim Aktivieren wechselt MiddleAI nötigenfalls zum lokalen Anbieter."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+        if state.config.assistant.provider == "local" {
+          Divider()
+          HStack {
+            Button {
+              state.runLocalModelBenchmark()
+            } label: {
+              if state.localBenchmarkRunning {
+                ProgressView().controlSize(.small)
+              } else {
+                Label("Lokales Modell testen", systemImage: "gauge.with.dots.needle.50percent")
+              }
+            }
+            .disabled(state.localBenchmarkRunning || state.config.localLLM.model.isEmpty)
+            Text(state.localBenchmarkStatus).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+          }
+          if let report = state.localBenchmarkReport {
+            HStack(spacing: 18) {
+              RequirementRow(
+                symbol: "speedometer", title: "Geschwindigkeit",
+                value: String(format: "%.1f Token/s", report.estimatedTokensPerSecond))
+              RequirementRow(
+                symbol: "memorychip", title: "Arbeitsspeicher",
+                value: "\(report.resources.physicalMemoryBytes / 1_073_741_824) GB")
+            }
+          }
         }
       }
 
@@ -468,6 +558,7 @@ struct SettingsView: View {
           Text("OpenWebUI").tag("openwebui")
           Text("OpenAI Platform").tag("openai")
           Text("OpenRouter").tag("openrouter")
+          Text("MiddleAI Lokal").tag("local")
         }
         .pickerStyle(.menu)
         SettingsField(
@@ -885,6 +976,62 @@ struct SettingsView: View {
       }
 
       SettingsCard(
+        title: "Adaptives Sprachwörterbuch",
+        subtitle: "Nur ausdrücklich bestätigte Namen und Fachbegriffe werden lokal korrigiert",
+        symbol: "character.book.closed"
+      ) {
+        SettingsField(
+          title: "Gesprochen", prompt: "z. B. mittlere ai", text: $speechLexiconSpoken)
+        SettingsField(
+          title: "Schreibweise", prompt: "z. B. MiddleAI", text: $speechLexiconWritten)
+        Toggle(
+          "Nur im Profil \(profileTitle(state.config.activeProfile)) verwenden",
+          isOn: $speechLexiconProfileScoped)
+        HStack {
+          Button("Bestätigte Korrektur hinzufügen") {
+            state.addSpeechLexiconEntry(
+              spoken: speechLexiconSpoken, written: speechLexiconWritten,
+              profileScoped: speechLexiconProfileScoped)
+            speechLexiconSpoken = ""
+            speechLexiconWritten = ""
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(
+            speechLexiconSpoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || speechLexiconWritten.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          Spacer()
+          Text(state.speechLexiconStatus).font(.caption).foregroundStyle(.secondary)
+        }
+        if !state.speechLexiconEntries.isEmpty {
+          Divider()
+          ForEach(state.speechLexiconEntries.prefix(12)) { entry in
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text("\(entry.spokenForm) → \(entry.writtenForm)")
+                  .font(.callout.weight(.medium))
+                Text(
+                  entry.scope.profileID.map { "Profil: \(profileTitle($0))" }
+                    ?? "Alle Profile"
+                )
+                .font(.caption2).foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button(role: .destructive) {
+                state.removeSpeechLexiconEntry(entry)
+              } label: {
+                Image(systemName: "trash")
+              }
+              .buttonStyle(.borderless)
+            }
+          }
+        }
+        Text(
+          "Die Anpassung erfolgt erst nach der Parakeet-Erkennung und verändert nur vollständige passende Begriffe. MiddleAI lernt niemals unbemerkt aus deinen Diktaten. Qualitätsmetriken bleiben in datenschutzsicheren Diagnoselogs ohne Sprachinhalt."
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
         title: "Aktivierungstasten", subtitle: "Lege für jeden Sprachmodus eine eigene Taste fest",
         symbol: "keyboard"
       ) {
@@ -1124,17 +1271,21 @@ struct SettingsView: View {
     }
   }
 
+  private var workflowsPane: some View {
+    WorkflowSettingsPane(state: state, meeting: state.meetingController)
+  }
+
   private var helpPane: some View {
     VStack(spacing: 16) {
       SettingsCard(
         title: "Antwortanbieter einrichten",
-        subtitle: "OpenWebUI, OpenAI Platform oder OpenRouter",
+        subtitle: "Lokal auf dem Mac oder über einen verbundenen Dienst",
         symbol: "point.3.connected.trianglepath.dotted"
       ) {
         HelpStep(
           number: "1", title: "Anbieter wählen",
           detail:
-            "OpenWebUI nutzt deinen eigenen Server. OpenAI und OpenRouter benötigen jeweils einen API-Schlüssel des Anbieters."
+            "MiddleAI Lokal nutzt Ollama oder llama.cpp ausschließlich über die Loopback-Adresse deines Macs. OpenWebUI nutzt deinen eigenen Server. OpenAI und OpenRouter benötigen jeweils einen API-Schlüssel des Anbieters."
         )
         HelpStep(
           number: "2", title: "Modelle laden",
@@ -1151,6 +1302,65 @@ struct SettingsView: View {
           systemImage: "info.circle"
         )
         .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: "Vollständig lokal arbeiten",
+        subtitle: "Antworten, Wissen und persönliche Präferenzen bleiben auf dem Mac",
+        symbol: "lock.laptopcomputer"
+      ) {
+        HelpStep(
+          number: "1", title: "MiddleAI Lokal auswählen",
+          detail:
+            "Wähle unter Verbindung den lokalen Anbieter und trage deinen Ollama- oder llama.cpp-Endpunkt ein. Der integrierte Benchmark prüft Antwortzeit, Arbeitsspeicher, Modellgröße und thermischen Zustand."
+        )
+        HelpStep(
+          number: "2", title: "Strikten Offline-Modus aktivieren",
+          detail:
+            "MiddleAI blockiert dann externe Anbieter und Weiterleitungen. Erlaubt bleiben nur localhost, 127.0.0.1 und ::1."
+        )
+        HelpStep(
+          number: "3", title: "Wissen bewusst freigeben",
+          detail:
+            "Unter Wissen gibst du einzelne Dateien oder eng begrenzte Ordner frei. MiddleAI indexiert unterstützte Textformate lokal und zeigt Quellen mit Zeilenbezug an."
+        )
+        HelpStep(
+          number: "4", title: "Memory kontrollieren",
+          detail:
+            "Persönliche Präferenzen werden nur nach ausdrücklicher Eingabe gespeichert. Du kannst Ablaufdatum, Aktivierung und Löschung für jeden Eintrag selbst steuern."
+        )
+        Label(
+          "Lokales Wissen und Memory werden ausschließlich an einen lokalen Antwortendpunkt übergeben. Entfernte OpenWebUI-, OpenAI- und OpenRouter-Verbindungen erhalten diese Inhalte nicht.",
+          systemImage: "checkmark.shield.fill"
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: "Lokale Workflows",
+        subtitle: "Auswahl bearbeiten, sichere Aktionen ausführen und Meetings protokollieren",
+        symbol: "wand.and.stars"
+      ) {
+        HelpStep(
+          number: "1", title: "Markierten Text bearbeiten",
+          detail:
+            "MiddleAI liest nur die aktuelle Auswahl. Zusammenfassen, Übersetzen und Umformulieren zeigen zuerst eine Vorschau; ersetzt wird erst nach deiner Bestätigung."
+        )
+        HelpStep(
+          number: "2", title: "Sprachaktionen bestätigen",
+          detail:
+            "Nur fest definierte lokale Aktionen sind zulässig. Verändernde Aktionen wie eine Erinnerung benötigen vor der Ausführung eine sichtbare Bestätigung."
+        )
+        HelpStep(
+          number: "3", title: "Meeting starten",
+          detail:
+            "Die aktuelle App-Version zeichnet nach ausdrücklichem Start das gewählte Mikrofon auf, transkribiert lokal und speichert Protokoll und Zusammenfassung im MiddleAI-Ordner."
+        )
+        HelpStep(
+          number: "4", title: "Fachbegriffe lernen",
+          detail:
+            "Unter Spracheingabe kannst du bestätigte Begriffe je Kontext hinterlegen und die Erkennungsqualität mit einem lokalen Benchmark vergleichen."
+        )
       }
 
       SettingsCard(
@@ -1443,12 +1653,16 @@ struct SettingsView: View {
   }
 
   private var providerSecretTitle: String {
+    if state.config.assistant.provider == "local" { return "Nicht erforderlich" }
     guard state.config.assistant.provider == "openwebui" else { return "API-Schlüssel" }
     return state.config.openwebui.authMethod == "api_key" ? "API-Schlüssel" : "Passwort"
   }
 
   private var answerProviderDescription: String {
     switch state.config.assistant.provider {
+    case "local":
+      return
+        "Vollständig lokale Antworten über einen laufenden Ollama- oder llama.cpp-Server. MiddleAI begrenzt den Gesprächskontext lokal und akzeptiert keine entfernten Zieladressen."
     case "openai":
       return
         "Direkter Zugriff auf die OpenAI Platform. Abrechnung und Datenverarbeitung erfolgen über dein OpenAI-API-Konto; ein ChatGPT-Abo enthält kein API-Guthaben."
@@ -1724,10 +1938,8 @@ struct SettingsView: View {
 
   private func selectAssistantProvider(_ provider: String) {
     guard state.config.assistant.provider != provider else { return }
-    state.config.assistant.provider = provider
+    state.selectAssistantProvider(provider)
     password = ""
-    state.providerModels = []
-    state.providerModelStatus = "Bitte für diesen Anbieter authentifizieren"
     saveMessage = ""
   }
 

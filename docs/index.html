@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#070911">
     <meta
       name="description"
-      content="MiddleAI ist die lokale Sprachschicht für macOS: lokal diktieren, OpenWebUI, OpenAI oder OpenRouter per Stimme nutzen und Antworten natürlich vorlesen lassen."
+      content="MiddleAI ist die lokale Sprachschicht für macOS: diktieren, vollständig lokal mit Ollama oder llama.cpp arbeiten, eigenes Wissen nutzen und Antworten natürlich vorlesen lassen."
     >
     <meta property="og:type" content="website">
     <meta property="og:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
@@ -20,7 +20,7 @@
     <meta name="twitter:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
     <meta
       name="twitter:description"
-      content="Lokales Diktat und eine Sprachschnittstelle zu OpenWebUI, OpenAI und OpenRouter für macOS."
+      content="Lokales Diktat, lokale KI-Antworten, eigenes Wissen und sichere Sprachaktionen für macOS."
     >
     <meta name="twitter:image" content="https://sschluet.github.io/middleai/assets/og.png">
     <link rel="canonical" href="https://sschluet.github.io/middleai/">
@@ -63,7 +63,8 @@
           <h1>Deine Stimme.<br><span>Dein Mac. Deine KI.</span></h1>
           <p class="hero-lead">
             MiddleAI verwandelt die beiden Optionstasten deines Macs in eine präzise
-            Diktierfunktion und eine Sprachschnittstelle zu OpenWebUI, OpenAI oder OpenRouter.
+            Diktierfunktion und eine Sprachschnittstelle zu einer vollständig lokalen KI oder
+            zu OpenWebUI, OpenAI und OpenRouter.
           </p>
           <div class="hero-actions">
             <a class="button button-primary download-link" href="https://github.com/sschluet/middleai/releases/latest">
@@ -73,7 +74,7 @@
             <a class="button button-secondary" href="#how-it-works">So funktioniert es</a>
           </div>
           <div class="hero-meta">
-            <span class="version-label">Version 0.7.0</span>
+            <span class="version-label">Version 0.8.0</span>
             <span>macOS 14+</span>
             <span>Apache 2.0</span>
           </div>
@@ -128,7 +129,7 @@
         <div class="section-shell trust-grid">
           <div><strong>100 % lokal</strong><span>STT und TTS auf deinem Mac</span></div>
           <div><strong>2 Tasten</strong><span>Diktat und KI jederzeit bereit</span></div>
-          <div><strong>Freie Anbieterwahl</strong><span>OpenWebUI · OpenAI · OpenRouter</span></div>
+          <div><strong>Freie Anbieterwahl</strong><span>MiddleAI Lokal · OpenWebUI · OpenAI · OpenRouter</span></div>
           <div><strong>Open Source</strong><span>Transparent unter Apache 2.0</span></div>
         </div>
       </section>
@@ -226,8 +227,8 @@
           <article class="feature-card reveal">
             <div class="feature-number">06</div>
             <h3>Dein Anbieter. Dein Modell.</h3>
-            <p>Verbinde OpenWebUI, OpenAI Platform oder OpenRouter. Nach der Anmeldung lädt MiddleAI die verfügbaren Modelle direkt vom Anbieter; Schlüssel bleiben im macOS-Schlüsselbund.</p>
-            <div class="feature-tags"><span>OpenWebUI</span><span>OpenAI</span><span>OpenRouter</span></div>
+            <p>Antworte lokal über Ollama oder llama.cpp oder verbinde OpenWebUI, OpenAI Platform und OpenRouter. Modelllisten werden direkt vom gewählten Anbieter geladen.</p>
+            <div class="feature-tags"><span>Ollama</span><span>llama.cpp</span><span>OpenWebUI</span><span>OpenAI</span><span>OpenRouter</span></div>
           </article>
 
           <article class="feature-card reveal reveal-delay">
@@ -250,6 +251,50 @@
             <p>MiddleAI registriert sich nativ als macOS-Anmeldeobjekt, startet unaufdringlich in der Menüleiste und zeigt in den Einstellungen den tatsächlichen Systemstatus.</p>
             <div class="feature-tags"><span>ServiceManagement</span><span>Menüleiste</span><span>Kontrollierbar</span></div>
           </article>
+
+          <article class="feature-card feature-wide reveal">
+            <div class="feature-number">10</div>
+            <div class="feature-copy">
+              <h3>Eigenes Wissen, lokal indexiert.</h3>
+              <p>Gib einzelne Dateien oder begrenzte Ordner bewusst frei. MiddleAI erstellt einen lokalen Suchindex, belegt Treffer mit Datei und Zeilenbereich und übergibt diesen Kontext ausschließlich an lokale Antwortmodelle.</p>
+              <div class="feature-tags"><span>Lokales RAG</span><span>Quellen</span><span>Explizite Freigaben</span><span>SQLite</span></div>
+            </div>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">11</div>
+            <h3>Auswahl statt Vollzugriff.</h3>
+            <p>Fasse markierten Text zusammen, übersetze oder formuliere ihn neu. MiddleAI liest nur die aktuelle Auswahl und zeigt jede Änderung vor dem Ersetzen als Vorschau.</p>
+            <div class="feature-tags"><span>Vorschau</span><span>Bestätigung</span><span>Lokal</span></div>
+          </article>
+
+          <article class="feature-card reveal reveal-delay">
+            <div class="feature-number">12</div>
+            <h3>Sichere Sprachaktionen.</h3>
+            <p>Eine feste lokale Aktionsliste verhindert beliebige Befehle. Verändernde Schritte wie Erinnerungen werden erst nach sichtbarer Bestätigung ausgeführt.</p>
+            <div class="feature-tags"><span>Allowlist</span><span>Bestätigung</span><span>EventKit</span></div>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">13</div>
+            <h3>Adaptive Fachsprache.</h3>
+            <p>Bestätigte Namen und Fachbegriffe lassen sich je Kontext hinterlegen. Ein lokaler Qualitätsbenchmark macht Änderungen an der Erkennung nachvollziehbar.</p>
+            <div class="feature-tags"><span>Lexikon</span><span>Kontexte</span><span>WER-Benchmark</span></div>
+          </article>
+
+          <article class="feature-card reveal reveal-delay">
+            <div class="feature-number">14</div>
+            <h3>Lokale Meeting-Notizen.</h3>
+            <p>Starte die Aufnahme bewusst, transkribiere das gewählte Mikrofon lokal und erhalte anschließend ein Protokoll sowie eine kompakte Zusammenfassung als Markdown und JSON.</p>
+            <div class="feature-tags"><span>Mikrofon</span><span>Transkript</span><span>Zusammenfassung</span></div>
+          </article>
+
+          <article class="feature-card reveal">
+            <div class="feature-number">15</div>
+            <h3>Ressourcen unter Kontrolle.</h3>
+            <p>Ein lokaler Benchmark bewertet Antwortzeit, Speicherbedarf, Modellgröße, Akkumodus und thermischen Zustand. Ein zentraler Scheduler priorisiert interaktive Spracheingaben.</p>
+            <div class="feature-tags"><span>Benchmark</span><span>Scheduler</span><span>Circuit Breaker</span></div>
+          </article>
         </div>
       </section>
 
@@ -260,14 +305,15 @@
             <h2>Deine Stimme<br><span>verlässt den Mac nicht.</span></h2>
             <p>
               Mikrofonaufnahme, Transkription, Diktatkorrektur, Zusammenfassung und
-              Sprachausgabe laufen lokal. Nur die fertige Assistentenanfrage wird an die von
-              dir konfigurierten Antwortanbieter gesendet.
+              Sprachausgabe laufen lokal. Im strikten Offline-Modus blockiert MiddleAI alle
+              externen Anbieter und akzeptiert nur Antwortdienste auf deinem Mac.
             </p>
             <ul class="check-list">
               <li><span>✓</span>Keine Cloud-STT- oder Cloud-TTS-Dienste</li>
               <li><span>✓</span>Zugangsdaten sicher im macOS-Schlüsselbund</li>
               <li><span>✓</span>Lokale API ausschließlich auf 127.0.0.1</li>
               <li><span>✓</span>Private Sitzungen ohne lokalen Gesprächsverlauf</li>
+              <li><span>✓</span>Lokales Wissen niemals an entfernte Anbieter</li>
               <li><span>✓</span>Open-Source-Code und reproduzierbare Releases</li>
             </ul>
             <a class="text-link" href="https://github.com/sschluet/middleai/blob/main/SECURITY.md">Sicherheitskonzept lesen <span>→</span></a>
@@ -282,8 +328,8 @@
               <div class="local-process"><b>3</b><span>Text & Routing</span><small>Lokale Entscheidung</small></div>
               <div class="local-result"><span>DIKTAT</span><b>Direkt in die Ziel-App</b><small>Der Text bleibt lokal.</small></div>
             </div>
-            <div class="secure-bridge"><span>Nur Assistentenanfragen</span><i></i><small>TLS</small></div>
-            <div class="webui-node"><span>ANTWORTANBIETER</span><strong>OpenWebUI · OpenAI · OpenRouter</strong><small>Du wählst Anbieter und Modell.</small></div>
+            <div class="secure-bridge"><span>Lokal oder bewusst extern</span><i></i><small>Kontrolliert</small></div>
+            <div class="webui-node"><span>ANTWORTANBIETER</span><strong>MiddleAI Lokal · OpenWebUI · OpenAI · OpenRouter</strong><small>Du wählst Anbieter, Modell und Offline-Grenze.</small></div>
           </div>
         </div>
       </section>
@@ -348,7 +394,7 @@
         <div class="faq-list reveal reveal-delay">
           <details>
             <summary>Läuft MiddleAI vollständig offline?<span>+</span></summary>
-            <p>Spracherkennung, Diktatkorrektur und Sprachausgabe laufen nach dem Modelldownload lokal. Für Assistentenanfragen benötigt MiddleAI Zugriff auf den konfigurierten OpenWebUI-, OpenAI- oder OpenRouter-Endpunkt.</p>
+            <p>Ja. Wähle MiddleAI Lokal mit Ollama oder llama.cpp und aktiviere den strikten Offline-Modus. MiddleAI blockiert dann externe Anbieter und Weiterleitungen; erlaubt bleiben nur Dienste auf localhost.</p>
           </details>
           <details>
             <summary>Kann ich MiddleAI auf einen anderen Mac kopieren?<span>+</span></summary>

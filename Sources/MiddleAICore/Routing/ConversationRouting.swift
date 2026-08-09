@@ -183,14 +183,17 @@ public struct LLMRouter: ConversationRoutingStrategy {
   public let session: URLSession
   public let timeout: TimeInterval
   private let circuitBreaker: LocalLLMCircuitBreaker
+  private let scheduler: InferenceScheduler
   public init(
     endpoint: URL, model: String, session: URLSession = .shared, timeout: TimeInterval = 4,
-    circuitBreakerFailures: Int = 3, circuitBreakerCooldown: TimeInterval = 30
+    circuitBreakerFailures: Int = 3, circuitBreakerCooldown: TimeInterval = 30,
+    scheduler: InferenceScheduler = .shared
   ) {
     self.endpoint = endpoint
     self.model = model
     self.session = session
     self.timeout = timeout
+    self.scheduler = scheduler
     self.circuitBreaker = LocalLLMCircuitBreaker(
       failureThreshold: circuitBreakerFailures, cooldown: circuitBreakerCooldown)
   }
@@ -199,7 +202,9 @@ public struct LLMRouter: ConversationRoutingStrategy {
       throw MiddleAIError.network("Local router is cooling down after repeated failures")
     }
     do {
-      let result = try await performRoute(context)
+      let result = try await scheduler.run(workload: .languageModel, priority: .utility) {
+        try await self.performRoute(context)
+      }
       await circuitBreaker.recordSuccess()
       return result
     } catch is CancellationError {

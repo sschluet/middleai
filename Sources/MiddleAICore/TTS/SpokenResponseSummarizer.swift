@@ -15,14 +15,16 @@ public actor SpokenResponseSummarizer {
   private let session: URLSession
   private let localCircuitBreaker: LocalLLMCircuitBreaker?
   private let systemModelEnabled: Bool
+  private let scheduler: InferenceScheduler
 
   public init(
     localLLM: AppConfig.LocalLLM? = nil, session: URLSession = .shared,
-    systemModelEnabled: Bool = true
+    systemModelEnabled: Bool = true, scheduler: InferenceScheduler = .shared
   ) {
     self.localLLM = localLLM
     self.session = session
     self.systemModelEnabled = systemModelEnabled
+    self.scheduler = scheduler
     if let localLLM, localLLM.enabled, ["ollama", "llama_cpp"].contains(localLLM.provider) {
       self.localCircuitBreaker = LocalLLMCircuitBreaker(
         failureThreshold: localLLM.circuitBreakerFailures,
@@ -108,7 +110,13 @@ public actor SpokenResponseSummarizer {
       request.timeoutInterval = localLLM.timeoutSeconds
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-      let (data, response) = try await session.data(for: request)
+      let session = self.session
+      let preparedRequest = request
+      let (data, response) = try await scheduler.run(
+        workload: .languageModel, priority: .utility
+      ) {
+        try await session.data(for: preparedRequest)
+      }
       guard (response as? HTTPURLResponse)?.statusCode == 200,
         let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
         let choices = root["choices"] as? [[String: Any]],

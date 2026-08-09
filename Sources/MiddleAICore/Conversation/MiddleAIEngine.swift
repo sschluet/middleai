@@ -13,6 +13,8 @@ public enum InputResult: Sendable, Equatable {
   private let pipeline: ResponsePipeline
   private let detector = CommandDetector()
   private let spokenSummarizer: SpokenResponseSummarizer
+  private let knowledgeBase: LocalKnowledgeBase?
+  private let profileMemory: ProfileMemoryService?
   private var config: AppConfig
   private let logger = MiddleAILogger()
   private let requestCoordinator = AssistantRequestCoordinator()
@@ -22,7 +24,8 @@ public enum InputResult: Sendable, Equatable {
   public private(set) var activeProfile: String
   public init(
     manager: ConversationManager, client: any AssistantClientProtocol, ttsQueue: TTSQueue,
-    config: AppConfig
+    config: AppConfig, knowledgeBase: LocalKnowledgeBase? = nil,
+    profileMemory: ProfileMemoryService? = nil
   ) {
     self.manager = manager
     self.client = client
@@ -31,6 +34,8 @@ public enum InputResult: Sendable, Equatable {
     self.activeProfile = config.activeProfile
     self.pipeline = ResponsePipeline(queue: ttsQueue, mode: config.spokenResponseMode)
     self.spokenSummarizer = SpokenResponseSummarizer(localLLM: config.localLLM)
+    self.knowledgeBase = knowledgeBase
+    self.profileMemory = profileMemory
   }
   public func handle(text: String, source: String = "unknown") async throws -> InputResult {
     if detector.detect(text) == .stop {
@@ -84,10 +89,31 @@ public enum InputResult: Sendable, Equatable {
       maximumCharacters: config.activeContextBudgetCharacters)
     let userMessage = Message(role: .user, content: text)
     var requestMessages = messages + [userMessage]
+    var localContextParts: [String] = []
+    let answerScopeIsLocal =
+      URL(string: config.assistantScope).map(NetworkAccessPolicy.isLoopback)
+      == true
+    if answerScopeIsLocal {
+      if let memoryContext = try? await profileMemory?.context(
+        profile: activeProfile, matching: text, maximumCharacters: 3_000),
+        !memoryContext.isEmpty
+      {
+        localContextParts.append(memoryContext)
+      }
+      if let knowledgeContext = try? await knowledgeBase?.context(
+        for: text, maximumCharacters: 8_000), !knowledgeContext.isEmpty
+      {
+        localContextParts.append(
+          "Lokal freigegebene Wissensquellen. Verwende nur passende Inhalte und nenne die angegebene Quelle:\n"
+            + knowledgeContext)
+      }
+    }
     let profilePrompt = config.profileSystemPrompt(for: activeProfile)
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    if !profilePrompt.isEmpty {
-      requestMessages.insert(Message(role: .system, content: profilePrompt), at: 0)
+    let combinedSystemContext = ([profilePrompt] + localContextParts)
+      .filter { !$0.isEmpty }.joined(separator: "\n\n")
+    if !combinedSystemContext.isEmpty {
+      requestMessages.insert(Message(role: .system, content: combinedSystemContext), at: 0)
     }
     let remoteScope = Self.remoteScope(config.assistantScope)
     if conversation.openWebUIChatID == nil || conversation.openWebUIBaseURL != remoteScope {
@@ -370,14 +396,24 @@ public enum MiddleAIFactory {
     default:
       provider = native
     }
+    let localContextStore = try SQLiteLocalContextStore(
+      path: directory.appendingPathComponent("local-context.sqlite").path)
     return MiddleAIEngine(
       manager: manager, client: client,
-      ttsQueue: TTSQueue(provider: provider, enabled: config.tts.enabled), config: config)
+      ttsQueue: TTSQueue(provider: provider, enabled: config.tts.enabled), config: config,
+      knowledgeBase: LocalKnowledgeBase(store: localContextStore),
+      profileMemory: ProfileMemoryService(store: localContextStore))
   }
 
   public static func makeAssistantClient(
     config: AppConfig, credentials: any CredentialStore
   ) throws -> any AssistantClientProtocol {
+    if config.privacy.strictOffline,
+      !["local", "openwebui"].contains(config.assistant.provider)
+    {
+      throw MiddleAIError.configuration(
+        "Strict offline mode blocked the hosted answer provider")
+    }
     switch config.assistant.provider {
     case "openai":
       return HostedAIClient(
@@ -387,10 +423,25 @@ public enum MiddleAIFactory {
       return HostedAIClient(
         provider: .openrouter, credentials: credentials,
         contextTokenBudget: config.openrouter.contextTokenBudget)
+    case "local":
+      guard config.localLLM.enabled,
+        ["ollama", "llama_cpp"].contains(config.localLLM.provider),
+        let endpoint = URL(string: config.localLLM.url)
+      else {
+        throw MiddleAIError.configuration(
+          "The local answer provider requires an enabled Ollama or llama.cpp endpoint")
+      }
+      return try LocalAssistantClient(
+        endpoint: endpoint, model: config.localLLM.model,
+        timeout: config.localLLM.answerTimeoutSeconds,
+        contextTokenBudget: config.localLLM.contextTokenBudget,
+        circuitBreakerFailures: config.localLLM.circuitBreakerFailures,
+        circuitBreakerCooldown: config.localLLM.circuitBreakerCooldownSeconds)
     default:
       guard let url = URL(string: config.openwebui.url) else {
         throw MiddleAIError.configuration("Invalid Open WebUI URL")
       }
+      if config.privacy.strictOffline { try NetworkAccessPolicy.requireLoopback(url) }
       let scopedCredentials = ScopedCredentialStore(
         base: credentials, baseURL: config.openwebui.url, profile: config.activeProfile)
       let auth: any AuthProvider =
@@ -399,7 +450,8 @@ public enum MiddleAIFactory {
         : PasswordAuthProvider(username: config.openwebui.username, credentials: scopedCredentials)
       return OpenWebUIClient(
         baseURL: url, auth: auth, tlsVerify: config.openwebui.tlsVerify,
-        caFile: config.openwebui.caFile)
+        caFile: config.openwebui.caFile,
+        session: config.privacy.strictOffline ? LoopbackOnlySession.make() : nil)
     }
   }
 }

@@ -2,6 +2,32 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.8.0 — 2026-08-09
+
+### Fully local assistant
+
+- Added a complete local answer provider for Ollama and llama.cpp with streaming conversation continuity, bounded timeouts, cancellation and a circuit breaker.
+- Added an enforced strict-offline mode that blocks hosted providers, non-loopback endpoints and remote redirects.
+- Added a device-specific local-model benchmark for response speed, memory, disk, battery and thermal guidance.
+
+### Knowledge and personal context
+
+- Added explicit local file and folder grants, safe-path validation, incremental text indexing, source citations and per-source revoke controls.
+- Added profile-scoped personal memory with explicit create, edit, expiry, enable and delete controls; conversations are never learned silently.
+- Added local selected-text correction, rewriting, translation and summarization with a side-by-side preview before replacement.
+
+### Voice workflows
+
+- Added allow-listed local voice actions with single-use confirmation for side effects such as reminders.
+- Added a user-approved adaptive STT lexicon with global and profile scopes plus reproducible local quality metrics.
+- Added explicit local meeting capture from the selected microphone with transcript, summary, decisions, tasks and owner-only Markdown/JSON export.
+
+### Reliability and interface
+
+- Added a shared priority-aware inference scheduler so interactive speech work runs ahead of background indexing.
+- Added dedicated Knowledge and Workflows settings, local-provider help, offline explanations and resource visibility.
+- Updated the in-app help, README, architecture documentation and GitHub Pages product site for the local feature suite.
+
 ## 0.7.0 — 2026-08-09
 
 ### macOS integration

@@ -2,7 +2,7 @@ import Foundation
 
 public struct AppConfig: Codable, Equatable, Sendable {
   public struct Assistant: Codable, Equatable, Sendable {
-    /// `openwebui`, `openai`, or `openrouter`.
+    /// `openwebui`, `openai`, `openrouter`, or `local`.
     public var provider = "openwebui"
   }
   public struct HostedAI: Codable, Equatable, Sendable {
@@ -29,6 +29,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
     public var url = "http://127.0.0.1:11434"
     public var model = "qwen3:4b"
     public var timeoutSeconds: TimeInterval = 4
+    /// Full answer generation can legitimately take longer than routing or summarization.
+    public var answerTimeoutSeconds: TimeInterval = 300
+    public var contextTokenBudget = 16_384
     public var circuitBreakerFailures = 3
     public var circuitBreakerCooldownSeconds: TimeInterval = 30
   }
@@ -116,6 +119,9 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public struct Privacy: Codable, Equatable, Sendable {
     /// Number of days to retain MiddleAI's local routing copy. Zero keeps it indefinitely.
     public var localCacheRetentionDays = 90
+    /// Enforces loopback-only answer-provider traffic. Hosted providers are rejected before a
+    /// client is constructed, and local HTTP clients refuse non-loopback redirects.
+    public var strictOffline = false
   }
   public struct Profiles: Codable, Equatable, Sendable {
     public var systemPrompts: [String: String] = AppConfig.defaultProfileSystemPrompts
@@ -217,6 +223,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
       switch assistant.provider {
       case "openai": return openai.model
       case "openrouter": return openrouter.model
+      case "local": return localLLM.model
       default: return openwebui.model
       }
     }
@@ -224,6 +231,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
       switch assistant.provider {
       case "openai": openai.model = newValue
       case "openrouter": openrouter.model = newValue
+      case "local": localLLM.model = newValue
       default: openwebui.model = newValue
       }
     }
@@ -233,6 +241,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     switch assistant.provider {
     case "openai": return "OpenAI"
     case "openrouter": return "OpenRouter"
+    case "local": return "MiddleAI Lokal"
     default: return "OpenWebUI"
     }
   }
@@ -241,6 +250,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
     switch assistant.provider {
     case "openai": return "openai://platform"
     case "openrouter": return "openrouter://platform"
+    case "local": return localLLM.url
     default: return openwebui.url
     }
   }
@@ -490,7 +500,7 @@ public enum ConfigLoader {
   }
 
   private static func validate(_ c: AppConfig) throws {
-    let assistantProviders = ["openwebui", "openai", "openrouter"]
+    let assistantProviders = ["openwebui", "openai", "openrouter", "local"]
     guard assistantProviders.contains(c.assistant.provider) else {
       throw MiddleAIError.configuration("assistant.provider is invalid")
     }
@@ -539,6 +549,8 @@ public enum ConfigLoader {
     }
     guard ["apple", "ollama", "llama_cpp"].contains(c.localLLM.provider),
       c.localLLM.model.count <= 512, (1...30).contains(c.localLLM.timeoutSeconds),
+      (10...1_800).contains(c.localLLM.answerTimeoutSeconds),
+      (512...1_000_000).contains(c.localLLM.contextTokenBudget),
       (1...10).contains(c.localLLM.circuitBreakerFailures),
       (5...600).contains(c.localLLM.circuitBreakerCooldownSeconds)
     else { throw MiddleAIError.configuration("Local LLM settings are invalid") }
@@ -549,6 +561,26 @@ public enum ConfigLoader {
       else {
         throw MiddleAIError.configuration(
           "Local LLM must use a loopback HTTP endpoint and a model ID")
+      }
+    }
+    if c.assistant.provider == "local" {
+      guard c.localLLM.enabled, ["ollama", "llama_cpp"].contains(c.localLLM.provider),
+        let endpoint = URL(string: c.localLLM.url),
+        NetworkAccessPolicy.isLoopback(endpoint),
+        !c.localLLM.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else {
+        throw MiddleAIError.configuration(
+          "The local answer provider requires an enabled Ollama or llama.cpp loopback endpoint")
+      }
+    }
+    if c.privacy.strictOffline {
+      guard
+        c.assistant.provider == "local"
+          || (c.assistant.provider == "openwebui"
+            && URL(string: c.openwebui.url).map(NetworkAccessPolicy.isLoopback) == true)
+      else {
+        throw MiddleAIError.configuration(
+          "Strict offline mode only permits local or loopback OpenWebUI answer providers")
       }
     }
     let ttsProviders = [

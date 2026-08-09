@@ -62,8 +62,18 @@ public struct Doctor: Sendable {
           "Sicherer OpenWebUI-Endpunkt", secureEndpoint,
           secureEndpoint ? "TLS oder lokaler Loopback" : "Für entfernte Server HTTPS verwenden"))
     }
+    if config.privacy.strictOffline {
+      let scopeURL = URL(string: config.assistantScope)
+      checks.append(
+        DiagnosticCheck(
+          "Strikter Offline-Modus",
+          scopeURL.map(NetworkAccessPolicy.isLoopback) == true,
+          "Antwortanbieter-Verkehr ist auf den lokalen Mac begrenzt"))
+    }
     let credentialAvailable: Bool
-    if config.assistant.provider == "openai" {
+    if config.assistant.provider == "local" {
+      credentialAvailable = true
+    } else if config.assistant.provider == "openai" {
       credentialAvailable =
         (try? credentials.read(account: HostedAIProvider.openai.credentialAccount)) != nil
     } else if config.assistant.provider == "openrouter" {
@@ -78,7 +88,9 @@ public struct Doctor: Sendable {
     }
     checks.append(
       DiagnosticCheck(
-        "Schlüsselbund / Zugangsdaten", credentialAvailable))
+        config.assistant.provider == "local"
+          ? "Lokaler Anbieter ohne Zugangsdaten" : "Schlüsselbund / Zugangsdaten",
+        credentialAvailable))
     do {
       try await client.health()
       checks.append(DiagnosticCheck("\(config.assistantProviderTitle) erreichbar", true))

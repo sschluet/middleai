@@ -61,6 +61,13 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("Atomic conversation exchange", ProviderRegressionTests.testAtomicExchange),
       ("Hosted context budget", ProviderRegressionTests.testContextBudget),
       ("Local spoken summary", ProviderRegressionTests.testLocalSpokenSummary),
+      ("Local answer and runtime", LocalFeatureRegressionTests.testLocalRuntime),
+      ("Local knowledge and memory", LocalFeatureRegressionTests.testLocalContext),
+      ("Local selection assistant", LocalFeatureRegressionTests.testLocalTextTransformation),
+      (
+        "Voice actions, adaptive STT and meetings",
+        LocalFeatureRegressionTests.testVoiceAndMeetingFeatures
+      ),
     ]
     for (name, test) in tests {
       do {

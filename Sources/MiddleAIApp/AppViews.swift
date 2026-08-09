@@ -129,7 +129,10 @@ struct QuickInputView: View {
 
         ZStack {
           ScrollView {
-            if state.responseText.isEmpty && !state.isWorking {
+            if let preview = state.selectionPreview {
+              SelectionPreviewView(state: state, preview: preview)
+                .padding(24)
+            } else if state.responseText.isEmpty && !state.isWorking {
               VStack(spacing: 14) {
                 MiddleAIIconView(cornerRadius: 17)
                   .frame(width: 70, height: 70)
@@ -226,6 +229,69 @@ struct QuickInputView: View {
     .onReceive(NotificationCenter.default.publisher(for: .middleAIQuickInputFocus)) { _ in
       focused = true
     }
+  }
+}
+
+private struct SelectionPreviewView: View {
+  @ObservedObject var state: AppState
+  let preview: TextTransformationResult
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        Label("Lokale Textvorschau", systemImage: "selection.pin.in.out")
+          .font(.title3.weight(.semibold))
+        Spacer()
+        Text("Noch nicht eingesetzt").font(.caption.weight(.medium)).foregroundStyle(.orange)
+          .padding(.horizontal, 9).padding(.vertical, 5)
+          .background(Color.orange.opacity(0.10), in: Capsule())
+      }
+      Text(state.selectionAssistantStatus).font(.caption).foregroundStyle(.secondary)
+      HStack(alignment: .top, spacing: 12) {
+        SelectionTextColumn(title: "Ausgangstext", text: preview.originalText)
+        Image(systemName: "arrow.right").foregroundStyle(.secondary).padding(.top, 34)
+        SelectionTextColumn(title: "Vorschlag", text: preview.transformedText)
+      }
+      ForEach(preview.warnings, id: \.self) { warning in
+        Label(warning, systemImage: "exclamationmark.triangle")
+          .font(.caption).foregroundStyle(.orange)
+      }
+      HStack {
+        Button("Vorschlag einsetzen") { state.applySelectionPreview() }
+          .buttonStyle(.borderedProminent)
+          .disabled(state.selectionAssistantWorking || !preview.changed)
+        Button("Verwerfen") { state.discardSelectionPreview() }
+          .buttonStyle(.bordered)
+        Spacer()
+        Label("Lokal verarbeitet", systemImage: "lock.fill")
+          .font(.caption).foregroundStyle(.green)
+      }
+    }
+    .padding(18)
+    .background(
+      Color(nsColor: .controlBackgroundColor).opacity(0.82),
+      in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.08))
+    }
+  }
+}
+
+private struct SelectionTextColumn: View {
+  let title: String
+  let text: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+      Text(text).font(.body).textSelection(.enabled)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .padding(12)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+    }
+    .frame(maxWidth: .infinity)
   }
 }
 

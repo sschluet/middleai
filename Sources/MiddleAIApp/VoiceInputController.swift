@@ -8,9 +8,11 @@ import OSLog
 @MainActor final class VoiceInputController {
   typealias EngineProvider = @MainActor () -> MiddleAIEngine?
   typealias ConfigProvider = @MainActor () -> AppConfig
+  typealias LocalActionHandler = @MainActor (String) async throws -> InputResult?
 
   private let recorder = MicrophoneRecorder()
   private let transcriber = ParakeetTranscriber()
+  private var adaptiveSpeech = try? AdaptiveSpeechService.live()
   private let polisher = DictationPolisher()
   private let insertion = TextInsertionService()
   private let overlay = VoiceNotchPresenter()
@@ -21,6 +23,7 @@ import OSLog
   private let onResult: (InputResult) -> Void
   private let onError: (String) -> Void
   private let onDismissed: () -> Void
+  private let localActionHandler: LocalActionHandler
   private lazy var keyMonitor = ActivationKeyMonitor(
     keys: { [weak self] in self?.activationKeys ?? (.leftOption, .rightOption) },
     onPressed: { [weak self] in self?.press($0) },
@@ -46,7 +49,8 @@ import OSLog
     onStarted: @escaping () -> Void,
     onResult: @escaping (InputResult) -> Void,
     onError: @escaping (String) -> Void,
-    onDismissed: @escaping () -> Void
+    onDismissed: @escaping () -> Void,
+    localActionHandler: @escaping LocalActionHandler = { _ in nil }
   ) {
     self.engineProvider = engineProvider
     self.configProvider = configProvider
@@ -55,6 +59,7 @@ import OSLog
     self.onResult = onResult
     self.onError = onError
     self.onDismissed = onDismissed
+    self.localActionHandler = localActionHandler
   }
 
   func prepare() {
@@ -90,6 +95,11 @@ import OSLog
         await MainActor.run { self.fail(error) }
       }
     }
+  }
+
+  func reloadAdaptiveSpeechLexicon() {
+    adaptiveSpeech = try? AdaptiveSpeechService.live()
+    onStatus("Lokales Sprachwörterbuch wurde aktualisiert")
   }
 
   func cancelCurrentInteraction() {
@@ -247,9 +257,24 @@ import OSLog
     processingTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let text = try await self.transcriber.transcribe(
-          audio, settings: self.configProvider().stt)
+        let sttSettings = self.configProvider().stt
+        let transcriber = self.transcriber
+        let rawText = try await InferenceScheduler.shared.run(
+          workload: .speechRecognition, priority: .realtime
+        ) {
+          try await transcriber.transcribe(audio, settings: sttSettings)
+        }
         try Task.checkCancellation()
+        let adaptive = await self.adaptiveSpeech?.process(
+          rawText, profileID: self.configProvider().activeProfile,
+          applicationBundleID: target?.bundleIdentifier, peakLevel: audio.peakLevel,
+          duration: audio.duration)
+        let text = adaptive?.corrected ?? rawText
+        if let quality = adaptive?.quality {
+          self.logger.notice(
+            "stt_quality confidence=\(quality.confidence, privacy: .public) words=\(quality.wordCount, privacy: .public) lexicon_matches=\(quality.lexiconMatches, privacy: .public) warnings=\(quality.warnings.joined(separator: ","), privacy: .public)"
+          )
+        }
         guard Self.isMeaningfulTranscript(text) else {
           await MainActor.run { self.dismissSilently() }
           return
@@ -342,6 +367,25 @@ import OSLog
     processingTask = Task { [weak self] in
       guard let self else { return }
       do {
+        if let localResult = try await self.localActionHandler(text) {
+          await MainActor.run {
+            self.onResult(localResult)
+            let answer = localResult.displayText
+            engine.ttsQueue.enqueue(answer)
+            self.overlay.update(phase: .result, detail: answer)
+            self.onStatus("Lokale Aktion abgeschlossen")
+          }
+          try await engine.ttsQueue.waitUntilIdle()
+          await MainActor.run {
+            self.assistantRequestActive = false
+            self.processingTask = nil
+            self.processingMode = nil
+            self.overlay.hide(after: 0.25)
+            self.onDismissed()
+            self.onStatus(self.readyStatus)
+          }
+          return
+        }
         try await engine.client.authenticate()
         let result = try await engine.handle(text: text, source: "voice-assistant")
         try Task.checkCancellation()

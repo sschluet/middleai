@@ -1,4 +1,5 @@
 import AppKit
+import MiddleAICore
 
 @MainActor
 final class MenuBarController: NSObject {
@@ -76,10 +77,40 @@ final class MenuBarController: NSObject {
     menu.addItem(.separator())
 
     menu.addItem(actionItem("MiddleAI öffnen…", action: #selector(showQuickInput)))
+    let selectionItem = NSMenuItem(
+      title: "Markierten Text lokal bearbeiten", action: nil, keyEquivalent: "")
+    let selectionMenu = NSMenu(title: "Markierten Text lokal bearbeiten")
+    let selectionActions: [(String, TextTransformationAction)] = [
+      ("Nur korrigieren", .correct), ("Formulierung glätten", .polish),
+      ("Kürzen", .shorten), ("Ausführlicher formulieren", .expand),
+      ("Auf Deutsch übersetzen", .translateGerman),
+      ("Auf Englisch übersetzen", .translateEnglish), ("In Stichpunkte", .bulletPoints),
+      ("Antwortentwurf", .replyDraft),
+    ]
+    for (title, action) in selectionActions {
+      let item = actionItem(title, action: #selector(transformSelection(_:)))
+      item.representedObject = action.rawValue
+      selectionMenu.addItem(item)
+    }
+    selectionItem.submenu = selectionMenu
+    selectionItem.isEnabled = true
+    menu.addItem(selectionItem)
     menu.addItem(actionItem("Einstellungen…", action: #selector(showSetup)))
     menu.addItem(actionItem("Hilfe & Systemanforderungen…", action: #selector(showHelp)))
     menu.addItem(actionItem("Neue Unterhaltung", action: #selector(startNewConversation)))
     menu.addItem(actionItem("Sprachausgabe stoppen", action: #selector(stopSpeaking)))
+    menu.addItem(.separator())
+    if state?.meetingController.isRecording == true {
+      menu.addItem(
+        actionItem("Besprechungsaufnahme beenden", action: #selector(stopMeeting)))
+      menu.addItem(
+        actionItem("Besprechungsaufnahme verwerfen", action: #selector(cancelMeeting)))
+    } else {
+      let meeting = actionItem(
+        "Besprechungsaufnahme starten", action: #selector(startMeeting))
+      meeting.isEnabled = state?.meetingController.isProcessing != true
+      menu.addItem(meeting)
+    }
 
     let providerItem = actionItem(
       "Anbieter-Seite öffnen", action: #selector(openProviderPage))
@@ -114,10 +145,19 @@ final class MenuBarController: NSObject {
   }
 
   @objc private func showQuickInput() { state?.showQuickInput() }
+  @objc private func transformSelection(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String,
+      let action = TextTransformationAction(rawValue: raw)
+    else { return }
+    state?.previewSelectedText(action: action)
+  }
   @objc private func showSetup() { state?.showSetupWindow(initialPane: .general) }
   @objc private func showHelp() { state?.showHelpWindow() }
   @objc private func startNewConversation() { state?.startNewConversation() }
   @objc private func stopSpeaking() { state?.stopSpeaking() }
+  @objc private func startMeeting() { state?.startMeeting() }
+  @objc private func stopMeeting() { state?.stopMeeting() }
+  @objc private func cancelMeeting() { state?.cancelMeeting() }
   @objc private func openProviderPage() { state?.openCurrentChat() }
   @objc private func showDiagnostics() { state?.showSetupWindow(initialPane: .diagnostics) }
   @objc private func quit() { NSApplication.shared.terminate(nil) }

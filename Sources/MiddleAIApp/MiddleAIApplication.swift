@@ -55,6 +55,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var voxtralLicenseAccepted = UserDefaults.standard.bool(
     forKey: "tts.voxtral.cc-by-nc-4.accepted")
   @Published var intelligenceStatus = "Bereit. Die schnelle lokale Hybrid-Auswahl ist aktiv."
+  @Published var localBenchmarkStatus = "Noch kein lokaler Leistungstest ausgeführt"
+  @Published var localBenchmarkReport: LocalModelBenchmarkReport?
+  @Published var localBenchmarkRunning = false
+  @Published var speechLexiconEntries: [SpeechLexiconEntry] = []
+  @Published var speechLexiconStatus = "Persönliches Wörterbuch ist leer"
+  @Published var knowledgeSources: [KnowledgeSource] = []
+  @Published var knowledgeStatus = "Noch keine lokale Wissensquelle freigegeben"
+  @Published var knowledgeIndexing = false
+  @Published var profileMemories: [ProfileMemory] = []
+  @Published var profileMemoryStatus = "Keine persönlichen Hinweise gespeichert"
+  @Published var selectionPreview: TextTransformationResult?
+  @Published var selectionAssistantStatus = "Markiere Text in einer anderen Anwendung"
+  @Published var selectionAssistantWorking = false
   @Published var profileStatus = "Profile sind bereit"
   @Published var conversations: [Conversation] = []
   @Published var localCacheStatus = "Lokaler Cache wird geprüft"
@@ -64,6 +77,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   @Published var launchAtLoginEnabled = true
   @Published var launchAtLoginState: LaunchAtLoginRegistrationState = .checking
   @Published var launchAtLoginStatus = "Autostart wird geprüft"
+  let meetingController = MeetingRecordingController()
   let credentials = CompositeCredentialStore()
   private(set) var engine: MiddleAIEngine?
   private var server: LocalInputServer?
@@ -83,6 +97,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private var builtAssistantProvider = ""
   private var ephemeralStore: InMemoryConversationStore?
   private let launchAtLoginController = LaunchAtLoginController()
+  private let selectedTextService = SelectedTextService()
+  private var selectedTextContext: SelectedTextContext?
+  private lazy var voiceActionDispatcher = SecureVoiceActionDispatcher(
+    executor: MacVoiceActionExecutor(state: self))
+  private let speechLexiconStore = try? SpeechLexiconStore(
+    fileURL: AdaptiveSpeechService.defaultStoreURL)
+  private let localContextStore = try? SQLiteLocalContextStore(
+    path: ConfigLoader.defaultDirectory.appendingPathComponent("local-context.sqlite").path)
+  private lazy var knowledgeBase: LocalKnowledgeBase? =
+    localContextStore.map { LocalKnowledgeBase(store: $0) }
+  private lazy var profileMemoryService: ProfileMemoryService? =
+    localContextStore.map { ProfileMemoryService(store: $0) }
   init() {
     let defaults = UserDefaults.standard
     if defaults.object(forKey: LaunchAtLoginController.preferenceKey) == nil {
@@ -127,6 +153,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       status = "Configuration error"
     }
     configureVoice()
+    refreshSpeechLexicon()
+    refreshLocalContext()
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(2))
+      self?.refreshKnowledgeIndexesInBackground()
+    }
     refreshTTSModelStatuses()
     menuBarController = MenuBarController(state: self)
     Task { @MainActor [weak self] in
@@ -190,6 +222,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       },
       onDismissed: { [weak self] in
         self?.isWorking = false
+      },
+      localActionHandler: { [weak self] transcript in
+        guard let self else { return nil }
+        return try await self.handleLocalVoiceAction(transcript)
       })
     Task { @MainActor [weak self] in
       try? await Task.sleep(for: .milliseconds(700))
@@ -346,6 +382,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       if announceInResponse { responseText = "Profil \(Self.profileTitle(profile)) ist aktiv." }
       profileStatus = "Profil \(Self.profileTitle(profile)) ist aktiv"
       refreshConversations()
+      refreshLocalContext()
       prepareTTSModel()
       Task { await connectAndServe() }
     } catch {
@@ -534,7 +571,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     }
     let provider: OfflineReadinessItem
-    if effective.assistant.provider == "openwebui",
+    if effective.assistant.provider == "local" {
+      provider = OfflineReadinessItem(
+        title: "Antwortanbieter", state: .needsService,
+        detail:
+          "\(effective.localLLM.provider == "llama_cpp" ? "llama.cpp" : "Ollama") muss auf diesem Mac laufen; Antworten verlassen den Mac nicht."
+      )
+    } else if effective.assistant.provider == "openwebui",
       let host = URL(string: effective.openwebui.url)?.host?.lowercased(),
       ["localhost", "127.0.0.1", "::1"].contains(host)
     {
@@ -616,6 +659,308 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     engine?.ttsQueue.stop()
     voiceStatus = "Sprachausgabe gestoppt"
   }
+
+  func refreshSpeechLexicon() {
+    guard let speechLexiconStore else { return }
+    Task {
+      speechLexiconEntries = await speechLexiconStore.allEntries()
+      speechLexiconStatus =
+        speechLexiconEntries.isEmpty
+        ? "Persönliches Wörterbuch ist leer"
+        : "\(speechLexiconEntries.count) ausdrücklich bestätigte Korrektur(en)"
+    }
+  }
+
+  func addSpeechLexiconEntry(
+    spoken: String, written: String, profileScoped: Bool, applicationBundleID: String? = nil
+  ) {
+    guard let speechLexiconStore else { return }
+    Task {
+      do {
+        _ = try await speechLexiconStore.recordCorrection(
+          spokenForm: spoken, writtenForm: written,
+          scope: SpeechLexiconScope(
+            profileID: profileScoped ? config.activeProfile : nil,
+            applicationBundleID: applicationBundleID),
+          userApproved: true)
+        voiceController?.reloadAdaptiveSpeechLexicon()
+        refreshSpeechLexicon()
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+  }
+
+  func removeSpeechLexiconEntry(_ entry: SpeechLexiconEntry) {
+    guard let speechLexiconStore else { return }
+    Task {
+      do {
+        try await speechLexiconStore.remove(id: entry.id)
+        voiceController?.reloadAdaptiveSpeechLexicon()
+        refreshSpeechLexicon()
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+  }
+
+  func refreshLocalContext() {
+    Task {
+      if let knowledgeBase {
+        knowledgeSources = (try? await knowledgeBase.sources()) ?? []
+        knowledgeStatus =
+          knowledgeSources.isEmpty
+          ? "Noch keine lokale Wissensquelle freigegeben"
+          : "\(knowledgeSources.count) freigegebene Quelle(n)"
+      }
+      if let profileMemoryService {
+        profileMemories =
+          (try? await profileMemoryService.memories(profile: config.activeProfile)) ?? []
+        profileMemoryStatus =
+          profileMemories.isEmpty
+          ? "Keine persönlichen Hinweise gespeichert"
+          : "\(profileMemories.count) Hinweis(e) im aktiven Profil"
+      }
+    }
+  }
+
+  func addKnowledgeSource(_ url: URL) {
+    guard let knowledgeBase, !knowledgeIndexing else { return }
+    knowledgeIndexing = true
+    knowledgeStatus = "Quelle wird geprüft und lokal indiziert …"
+    Task {
+      do {
+        let source = try await knowledgeBase.grant(url: url)
+        let report = try await knowledgeBase.index(sourceID: source.id)
+        knowledgeStatus =
+          "\(report.indexedFiles) Datei(en), \(report.indexedChunks) Abschnitt(e) lokal indiziert"
+        refreshLocalContext()
+      } catch {
+        knowledgeStatus = "Quelle konnte nicht indiziert werden"
+        lastError = error.localizedDescription
+      }
+      knowledgeIndexing = false
+    }
+  }
+
+  func reindexKnowledgeSource(_ source: KnowledgeSource) {
+    guard let knowledgeBase, !knowledgeIndexing else { return }
+    knowledgeIndexing = true
+    knowledgeStatus = "\(source.displayName) wird neu indiziert …"
+    Task {
+      do {
+        let report = try await knowledgeBase.index(sourceID: source.id)
+        knowledgeStatus =
+          "\(report.indexedFiles) Datei(en), \(report.indexedChunks) Abschnitt(e) aktualisiert"
+        refreshLocalContext()
+      } catch {
+        knowledgeStatus = "Neuindizierung fehlgeschlagen"
+        lastError = error.localizedDescription
+      }
+      knowledgeIndexing = false
+    }
+  }
+
+  func refreshKnowledgeIndexesInBackground() {
+    guard let knowledgeBase, !knowledgeIndexing else { return }
+    Task {
+      let sources = (try? await knowledgeBase.sources()) ?? []
+      let enabled = sources.filter(\.enabled)
+      guard !enabled.isEmpty else { return }
+      knowledgeIndexing = true
+      var files = 0
+      var chunks = 0
+      for source in enabled {
+        if let report = try? await knowledgeBase.index(sourceID: source.id) {
+          files += report.indexedFiles
+          chunks += report.indexedChunks
+        }
+      }
+      knowledgeIndexing = false
+      knowledgeStatus = "Automatisch aktualisiert · \(files) Datei(en), \(chunks) Abschnitt(e)"
+      refreshLocalContext()
+    }
+  }
+
+  func setKnowledgeSource(_ source: KnowledgeSource, enabled: Bool) {
+    guard let knowledgeBase else { return }
+    Task {
+      do {
+        try await knowledgeBase.setEnabled(sourceID: source.id, enabled: enabled)
+        refreshLocalContext()
+      } catch { lastError = error.localizedDescription }
+    }
+  }
+
+  func removeKnowledgeSource(_ source: KnowledgeSource) {
+    guard let knowledgeBase else { return }
+    Task {
+      do {
+        try await knowledgeBase.revoke(sourceID: source.id)
+        refreshLocalContext()
+      } catch { lastError = error.localizedDescription }
+    }
+  }
+
+  func addProfileMemory(key: String, value: String, expiresAt: Date?) {
+    guard let profileMemoryService else { return }
+    Task {
+      do {
+        _ = try await profileMemoryService.create(
+          profile: config.activeProfile, key: key, value: value, expiresAt: expiresAt)
+        refreshLocalContext()
+      } catch { lastError = error.localizedDescription }
+    }
+  }
+
+  func removeProfileMemory(_ memory: ProfileMemory) {
+    guard let profileMemoryService else { return }
+    Task {
+      do {
+        try await profileMemoryService.delete(id: memory.id)
+        refreshLocalContext()
+      } catch { lastError = error.localizedDescription }
+    }
+  }
+
+  func startMeeting(title: String? = nil) {
+    guard !meetingController.isRecording, !meetingController.isProcessing else { return }
+    voiceController?.cancelCurrentInteraction()
+    Task {
+      do {
+        try await meetingController.start(title: title, settings: config.stt)
+        voiceStatus = "Besprechungsaufnahme aktiv"
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+  }
+
+  func stopMeeting() {
+    guard meetingController.isRecording else { return }
+    meetingController.stop(settings: config.stt)
+    voiceStatus = "Besprechung wird lokal verarbeitet"
+  }
+
+  func cancelMeeting() {
+    meetingController.cancel()
+    voiceStatus = "Besprechungsaufnahme verworfen"
+  }
+
+  func previewSelectedText(action: TextTransformationAction) {
+    guard !selectionAssistantWorking else { return }
+    do {
+      let context = try selectedTextService.capture()
+      guard config.localLLM.enabled, ["ollama", "llama_cpp"].contains(config.localLLM.provider),
+        let endpoint = URL(string: config.localLLM.url)
+      else {
+        throw MiddleAIError.configuration(
+          "Für Auswahlaktionen bitte unter Intelligenz einen lokalen Ollama- oder llama.cpp-Server auswählen."
+        )
+      }
+      let generator = try OpenAICompatibleLocalTextGenerator(
+        endpoint: endpoint, model: config.localLLM.model,
+        timeout: min(120, config.localLLM.answerTimeoutSeconds))
+      let assistant = TextTransformationAssistant(generator: generator)
+      selectedTextContext = context
+      let selectedText = context.text
+      let profilePrompt = config.profileSystemPrompt(for: config.activeProfile)
+      selectionPreview = nil
+      selectionAssistantWorking = true
+      selectionAssistantStatus =
+        "Markierter Text aus \(context.applicationName) wird lokal verarbeitet …"
+      showQuickInput()
+      Task {
+        do {
+          let result = try await InferenceScheduler.shared.run(
+            workload: .languageModel, priority: .userInitiated
+          ) {
+            try await assistant.preview(
+              TextTransformationRequest(
+                selectedText: selectedText, action: action,
+                profileSystemPrompt: profilePrompt))
+          }
+          selectionPreview = result
+          selectionAssistantStatus =
+            result.changed
+            ? "Lokale Vorschau bereit · erst nach deiner Freigabe wird ersetzt"
+            : "Das lokale Modell schlägt keine Änderung vor"
+        } catch {
+          selectedTextContext = nil
+          lastError = error.localizedDescription
+          selectionAssistantStatus = "Lokale Textaktion fehlgeschlagen"
+        }
+        selectionAssistantWorking = false
+      }
+    } catch {
+      lastError = error.localizedDescription
+      selectionAssistantStatus = error.localizedDescription
+    }
+  }
+
+  func applySelectionPreview() {
+    guard let selectionPreview, let selectedTextContext else { return }
+    selectionAssistantWorking = true
+    Task {
+      do {
+        try await selectedTextService.replace(
+          selectedTextContext, with: selectionPreview.transformedText)
+        selectionAssistantStatus =
+          "Überarbeiteter Text wurde in \(selectedTextContext.applicationName) eingesetzt"
+        self.selectionPreview = nil
+        self.selectedTextContext = nil
+      } catch {
+        lastError = error.localizedDescription
+      }
+      selectionAssistantWorking = false
+    }
+  }
+
+  func discardSelectionPreview() {
+    selectionPreview = nil
+    selectedTextContext = nil
+    selectionAssistantStatus = "Vorschlag verworfen · Ausgangstext blieb unverändert"
+  }
+
+  private func handleLocalVoiceAction(_ transcript: String) async throws -> InputResult? {
+    let request: VoiceActionRequest
+    do {
+      request = try StructuredVoiceActionParser().parseTranscript(transcript)
+    } catch VoiceActionParseError.notAnAction {
+      return nil
+    }
+    let outcome = try await voiceActionDispatcher.dispatch(request)
+    switch outcome {
+    case .executed(let result):
+      return .local(result.message)
+    case .rejected:
+      return .local("Diese lokale Aktion ist nicht freigegeben.")
+    case .confirmationRequired(let pending, let token, _):
+      let alert = NSAlert()
+      alert.alertStyle = .warning
+      alert.messageText = "Lokale Aktion bestätigen"
+      alert.informativeText = voiceActionConfirmationText(pending)
+      alert.addButton(withTitle: "Ausführen")
+      alert.addButton(withTitle: "Abbrechen")
+      guard alert.runModal() == .alertFirstButtonReturn else {
+        return .local("Aktion abgebrochen.")
+      }
+      switch try await voiceActionDispatcher.confirm(request: pending, token: token) {
+      case .executed(let result): return .local(result.message)
+      case .rejected, .confirmationRequired: return .local("Bestätigung ist abgelaufen.")
+      }
+    }
+  }
+
+  private func voiceActionConfirmationText(_ request: VoiceActionRequest) -> String {
+    switch request.kind {
+    case .createReminder:
+      return
+        "MiddleAI möchte in der Erinnerungen-App folgenden Eintrag anlegen:\n\n\(request.title ?? "Erinnerung")"
+    default:
+      return "MiddleAI möchte die Aktion \(request.kind.rawValue) ausführen."
+    }
+  }
   func openCurrentChat() {
     guard let engine, let id = engine.manager.currentConversation?.openWebUIChatID else { return }
     NSWorkspace.shared.open(engine.client.chatURL(id: id))
@@ -664,6 +1009,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   private func saveProviderCredential(_ secret: String) throws {
     guard !secret.isEmpty else { return }
     switch config.assistant.provider {
+    case "local":
+      return
     case "openai":
       try credentials.save(secret, account: HostedAIProvider.openai.credentialAccount)
     case "openrouter":
@@ -677,6 +1024,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private var credentialAccountForSelectedProvider: String {
     switch config.assistant.provider {
+    case "local": return ""
     case "openai": return HostedAIProvider.openai.credentialAccount
     case "openrouter": return HostedAIProvider.openrouter.credentialAccount
     default: return config.openwebui.authMethod == "api_key" ? "api_token" : "password"
@@ -684,6 +1032,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private var trialCredentialAccounts: [String] {
+    if config.assistant.provider == "local" { return [] }
     let account = credentialAccountForSelectedProvider
     guard config.assistant.provider == "openwebui" else { return [account] }
     let scoped = ScopedCredentialStore(
@@ -696,6 +1045,74 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       provider == "openai"
       ? ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.4"] : []
     return preferences.first(where: models.contains) ?? models.first
+  }
+
+  func selectAssistantProvider(_ provider: String) {
+    guard ["openwebui", "openai", "openrouter", "local"].contains(provider) else { return }
+    config.assistant.provider = provider
+    if provider == "local" {
+      config.localLLM.enabled = true
+      if config.localLLM.provider == "apple" {
+        config.localLLM.provider = "ollama"
+        config.localLLM.url = "http://127.0.0.1:11434"
+        config.localLLM.model = "qwen3:4b"
+      }
+    }
+    providerModels = []
+    providerModelStatus =
+      provider == "local"
+      ? "Lokalen Server prüfen und Modelle laden" : "Bitte für diesen Anbieter authentifizieren"
+    localBenchmarkReport = nil
+    localBenchmarkStatus = "Noch kein lokaler Leistungstest ausgeführt"
+  }
+
+  func setStrictOffline(_ enabled: Bool) {
+    config.privacy.strictOffline = enabled
+    if enabled {
+      let currentIsLoopbackOpenWebUI =
+        config.assistant.provider == "openwebui"
+        && URL(string: config.openwebui.url).map(NetworkAccessPolicy.isLoopback) == true
+      if config.assistant.provider != "local" && !currentIsLoopbackOpenWebUI {
+        selectAssistantProvider("local")
+      }
+    }
+    do {
+      try ConfigLoader.save(config)
+      try rebuild()
+      voiceStatus =
+        enabled
+        ? "Strikter Offline-Modus aktiv · nur lokale Verbindungen erlaubt"
+        : "Offline-Sperre deaktiviert · die gewählte Anbieterregel gilt"
+      Task { await connectAndServe() }
+    } catch {
+      config.privacy.strictOffline.toggle()
+      lastError = error.localizedDescription
+    }
+  }
+
+  func runLocalModelBenchmark() {
+    guard config.assistant.provider == "local", let engine, !localBenchmarkRunning else {
+      localBenchmarkStatus = "Für den Leistungstest bitte MiddleAI Lokal auswählen"
+      return
+    }
+    let selectedModel = config.localLLM.model
+    localBenchmarkRunning = true
+    localBenchmarkStatus = "Lokales Modell wird kurz getestet …"
+    Task {
+      do {
+        let report = try await LocalModelBenchmarkService(client: engine.client).run(
+          model: selectedModel)
+        localBenchmarkReport = report
+        localBenchmarkStatus = String(
+          format: "%.1f Token/s · erste Ausgabe nach %.1f s · bis etwa %dB empfohlen",
+          report.estimatedTokensPerSecond, report.timeToFirstTokenSeconds ?? 0,
+          report.resources.recommendedMaximumModelBillions)
+      } catch {
+        localBenchmarkStatus = "Leistungstest fehlgeschlagen"
+        lastError = error.localizedDescription
+      }
+      localBenchmarkRunning = false
+    }
   }
   var dictationPolishingStatus: String {
     DictationPolisher.availabilityDescription
