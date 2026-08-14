@@ -42,6 +42,7 @@ enum VoiceCaptureStopReason: Sendable {
 final class MicrophoneRecorder: @unchecked Sendable {
   private var engine: AVAudioEngine?
   private let lock = NSLock()
+  private let engineLock = NSLock()
   private var accumulator = VoiceSampleAccumulator()
   private var peakLevel: Float = 0
   private var startedAt: Date?
@@ -52,6 +53,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var stopRequested = false
   private var lastLevelUptime: TimeInterval = 0
   private var configurationObserver: NSObjectProtocol?
+  private var configurationRecoveryGeneration = 0
+  private let audioRecoveryPolicy = AudioDeviceRecoveryPolicy()
+  private let configurationRecoveryQueue = DispatchQueue(
+    label: "de.middleai.audio-configuration-recovery", qos: .userInitiated)
 
   func start(
     deviceUID: String, maximumDuration: TimeInterval = 120,
@@ -59,7 +64,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     onLevel: @escaping @Sendable (Float) -> Void,
     onAutomaticStop: @escaping @Sendable (VoiceCaptureStopReason) -> Void = { _ in }
   ) throws {
-    if engine != nil { _ = stop() }
+    if engineLock.withVoiceLock({ engine != nil }) { _ = stop() }
     // A fresh engine prevents stale Core Audio device IDs after USB, display or default-device
     // changes. Reusing the previous input node can leave AVAudioEngine bound to a device that
     // macOS has already replaced.
@@ -142,43 +147,65 @@ final class MicrophoneRecorder: @unchecked Sendable {
       if shouldReportLevel { onLevel(normalized) }
       if let event { onAutomaticStop(event) }
     }
-    tapInstalled = true
-    engine = recordingEngine
+    engineLock.withVoiceLock {
+      tapInstalled = true
+      engine = recordingEngine
+    }
     recordingEngine.prepare()
     do {
       try recordingEngine.start()
-      configurationObserver = NotificationCenter.default.addObserver(
+      let engineIdentity = ObjectIdentifier(recordingEngine)
+      let observer = NotificationCenter.default.addObserver(
         forName: Notification.Name.AVAudioEngineConfigurationChange,
         object: recordingEngine, queue: nil
       ) { [weak self] _ in
         guard let self else { return }
-        let shouldStop = self.lock.withVoiceLock {
-          guard !self.stopRequested else { return false }
-          self.stopRequested = true
-          return true
+        // Bluetooth headsets send a configuration notification while switching from their
+        // high-quality output profile to the bidirectional headset profile. Stopping immediately
+        // discards every AirPods recording. Give Core Audio a short stabilization window and only
+        // end the capture if the engine is actually no longer running afterwards.
+        let recoveryGeneration: Int? = self.engineLock.withVoiceLock {
+          guard let currentEngine = self.engine,
+            ObjectIdentifier(currentEngine) == engineIdentity
+          else { return nil }
+          self.configurationRecoveryGeneration += 1
+          return self.configurationRecoveryGeneration
         }
-        if shouldStop { onAutomaticStop(.audioDeviceChanged) }
+        guard let recoveryGeneration else { return }
+        self.configurationRecoveryQueue.asyncAfter(deadline: .now() + .milliseconds(650)) {
+          self.recoverEngineAfterConfigurationChange(
+            engineIdentity: engineIdentity, generation: recoveryGeneration, failureCount: 0,
+            onFailure: onAutomaticStop)
+        }
       }
+      engineLock.withVoiceLock { configurationObserver = observer }
     } catch {
-      input.removeTap(onBus: 0)
-      tapInstalled = false
-      engine = nil
+      engineLock.withVoiceLock {
+        input.removeTap(onBus: 0)
+        tapInstalled = false
+        engine = nil
+      }
       throw error
     }
   }
 
   func stop() -> CapturedAudio {
-    let recordingEngine = engine
-    if tapInstalled, let recordingEngine {
-      recordingEngine.inputNode.removeTap(onBus: 0)
+    let lifecycle = engineLock.withVoiceLock { () -> (AVAudioEngine?, Bool, NSObjectProtocol?) in
+      configurationRecoveryGeneration += 1
+      let lifecycle = (engine, tapInstalled, configurationObserver)
+      engine = nil
       tapInstalled = false
+      configurationObserver = nil
+      return lifecycle
+    }
+    let recordingEngine = lifecycle.0
+    if lifecycle.1, let recordingEngine {
+      recordingEngine.inputNode.removeTap(onBus: 0)
     }
     recordingEngine?.stop()
     recordingEngine?.reset()
-    engine = nil
-    if let configurationObserver {
+    if let configurationObserver = lifecycle.2 {
       NotificationCenter.default.removeObserver(configurationObserver)
-      self.configurationObserver = nil
     }
     return lock.withVoiceLock {
       let duration = accumulator.duration
@@ -200,6 +227,45 @@ final class MicrophoneRecorder: @unchecked Sendable {
   func cancel() { _ = stop() }
 
   private var activeDeviceName = "Unbekanntes Mikrofon"
+
+  private func recoverEngineAfterConfigurationChange(
+    engineIdentity: ObjectIdentifier, generation: Int, failureCount: Int,
+    onFailure: @escaping @Sendable (VoiceCaptureStopReason) -> Void
+  ) {
+    let restartFailed = engineLock.withVoiceLock {
+      guard generation == configurationRecoveryGeneration, let currentEngine = engine,
+        ObjectIdentifier(currentEngine) == engineIdentity
+      else { return false }
+      guard !currentEngine.isRunning else { return false }
+      do {
+        currentEngine.prepare()
+        try currentEngine.start()
+        return false
+      } catch {
+        return true
+      }
+    }
+    guard restartFailed else { return }
+
+    let nextFailureCount = failureCount + 1
+    if let delay = audioRecoveryPolicy.delayNanoseconds(afterFailure: nextFailureCount) {
+      configurationRecoveryQueue.asyncAfter(
+        deadline: .now() + .nanoseconds(Int(clamping: delay))
+      ) { [weak self] in
+        self?.recoverEngineAfterConfigurationChange(
+          engineIdentity: engineIdentity, generation: generation,
+          failureCount: nextFailureCount, onFailure: onFailure)
+      }
+      return
+    }
+
+    let shouldStop = lock.withVoiceLock {
+      guard !stopRequested else { return false }
+      stopRequested = true
+      return true
+    }
+    if shouldStop { onFailure(.audioDeviceChanged) }
+  }
 
   private static func monoSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
     guard buffer.format.commonFormat == .pcmFormatFloat32,

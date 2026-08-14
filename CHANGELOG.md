@@ -2,6 +2,15 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.8.3 — 2026-08-14
+
+### Audio device handoff
+
+- Kept an active recording alive during the expected Core Audio configuration change when Bluetooth headphones switch into their bidirectional headset profile.
+- Added bounded automatic microphone-start retries while newly selected devices such as AirPods are still negotiating their input format.
+- Made all retry work cancellable so a single Option-key press still stops an interaction immediately.
+- Added regression coverage for retry timing and the terminal failure boundary.
+
 ## 0.8.2 — 2026-08-09
 
 ### Selected text service

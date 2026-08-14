@@ -40,6 +40,8 @@ import OSLog
   private var activationGate = ActivationGestureGate<VoiceMode>()
   private var activationGateResetTask: Task<Void, Never>?
   private var microphoneAuthorized = false
+  private var recordingStartTask: Task<Void, Never>?
+  private let audioRecoveryPolicy = AudioDeviceRecoveryPolicy()
   private let logger = Logger(subsystem: "de.middleai.app", category: "voice")
 
   init(
@@ -104,6 +106,8 @@ import OSLog
 
   func cancelCurrentInteraction() {
     clearPendingActivation()
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     processingTask?.cancel()
     processingTask = nil
     processingMode = nil
@@ -182,6 +186,11 @@ import OSLog
     recordingStartedAt = Date()
     dictationTarget = mode == .dictation ? insertion.captureTarget() : nil
     overlay.show(mode: mode, targetIcon: dictationTarget?.icon)
+    startRecording(mode, failureCount: 0)
+  }
+
+  private func startRecording(_ mode: VoiceMode, failureCount: Int) {
+    guard activeMode == mode else { return }
     do {
       let stt = configProvider().stt
       try recorder.start(
@@ -205,11 +214,31 @@ import OSLog
             self.finishRecording(mode)
           }
         })
+      recordingStartTask = nil
       onStatus(mode == .dictation ? "Diktat läuft" : "MiddleAI hört zu")
     } catch {
-      activeMode = nil
-      recordingStartedAt = nil
-      fail(error)
+      recorder.cancel()
+      let nextFailureCount = failureCount + 1
+      guard let delay = audioRecoveryPolicy.delayNanoseconds(afterFailure: nextFailureCount) else {
+        activeMode = nil
+        latchedMode = nil
+        recordingStartedAt = nil
+        dictationTarget = nil
+        recordingStartTask = nil
+        fail(error)
+        return
+      }
+      logger.notice(
+        "audio_start_retry failure=\(nextFailureCount, privacy: .public) delay_ms=\(delay / 1_000_000, privacy: .public)"
+      )
+      onStatus("Audiogerät wird vorbereitet · Aufnahme startet automatisch")
+      overlay.update(phase: .listening, detail: "Audiogerät wird vorbereitet …")
+      recordingStartTask?.cancel()
+      recordingStartTask = Task { [weak self] in
+        try? await Task.sleep(nanoseconds: delay)
+        guard !Task.isCancelled, let self, self.activeMode == mode else { return }
+        self.startRecording(mode, failureCount: nextFailureCount)
+      }
     }
   }
 
@@ -232,6 +261,8 @@ import OSLog
 
   private func finishRecording(_ mode: VoiceMode) {
     guard activeMode == mode else { return }
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     activeMode = nil
     latchedMode = nil
     recordingStartedAt = nil
@@ -427,6 +458,8 @@ import OSLog
   private func cancel() {
     clearPendingActivation()
     guard activeMode != nil else { return }
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     activeMode = nil
     latchedMode = nil
     ignoreReleaseForMode = nil
@@ -438,6 +471,8 @@ import OSLog
   }
 
   private func dismissSilently() {
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     processingTask = nil
     processingMode = nil
     overlay.hide()
@@ -487,6 +522,8 @@ import OSLog
 
   private func abortProcessing(_ mode: VoiceMode) {
     clearPendingActivation()
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     assistantRequestActive = false
     processingTask?.cancel()
     processingTask = nil
@@ -501,6 +538,8 @@ import OSLog
   }
 
   private func fail(_ error: Error) {
+    recordingStartTask?.cancel()
+    recordingStartTask = nil
     processingTask = nil
     processingMode = nil
     let message = error.localizedDescription

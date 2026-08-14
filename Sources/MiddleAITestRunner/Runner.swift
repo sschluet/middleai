@@ -47,6 +47,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("HybridRouter threshold", testHybridThreshold),
       ("ConversationManager", testManager), ("Empty conversation drafts", testConversationDrafts),
       ("Activation double tap", testActivationGestureGate),
+      ("Audio device recovery", testAudioDeviceRecovery),
       ("Confidence management", testConfidence),
       ("TTS queue/barge-in", testTTSQueue), ("Response delivery", testResponseDelivery),
       ("Voice sample accumulator", AudioTTSRegressionTests.testVoiceAccumulator),
@@ -81,6 +82,21 @@ struct FixedRouter: ConversationRoutingStrategy {
     }
     print("\n\(passed) passed, \(failed) failed")
     if failed > 0 { exit(1) }
+  }
+
+  static func testAudioDeviceRecovery() async throws {
+    let policy = AudioDeviceRecoveryPolicy()
+    try expect(policy.maximumAttempts == 5, "audio recovery attempt count")
+    try expect(
+      policy.delayNanoseconds(afterFailure: 1) == 150_000_000,
+      "first audio recovery delay")
+    try expect(
+      policy.delayNanoseconds(afterFailure: 4) == 900_000_000,
+      "last audio recovery delay")
+    try expect(policy.delayNanoseconds(afterFailure: 0) == nil, "invalid audio recovery failure")
+    try expect(
+      policy.delayNanoseconds(afterFailure: policy.maximumAttempts) == nil,
+      "audio recovery stops after bounded attempts")
   }
   static func testConfig() async throws {
     var c = AppConfig()
