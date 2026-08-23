@@ -144,15 +144,69 @@ enum LocalFeatureRegressionTests {
 
     let directory = temporaryDirectory("integrity")
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = SystemIntegrityStore(directory: directory)
+    let store = SystemIntegrityStore(
+      directory: directory, authenticationKey: Data(repeating: 0x31, count: 32))
     try await store.saveBaseline(baseline)
     let restoredBaseline = try await store.baseline()
     try expect(restoredBaseline?.fingerprint == baseline.fingerprint, "baseline roundtrip")
-    try await store.append(result.findings, retentionDays: 30)
-    let storedFindings = try await store.findings()
+    var storedFindings = try await store.reconcile(result.findings, retentionDays: 30)
     let historyStatus = await store.status()
     try expect(!storedFindings.isEmpty, "integrity history")
     try expect(historyStatus == .valid(result.findings.count), "integrity hash chain")
+    try expect(storedFindings.allSatisfy { $0.lifecycleState == .new }, "new finding lifecycle")
+    storedFindings = try await store.reconcile([], retentionDays: 30)
+    try expect(storedFindings.allSatisfy { $0.lifecycleState == .resolved }, "resolved lifecycle")
+    let outageFinding = IntegrityFinding(
+      severity: .warning, category: .system, title: "Logsignal", detail: "Test",
+      subjectMaterial: "logsignal",
+      source: IntegrityFindingSource(
+        kind: .console, title: "Konsole", locator: "/System/Applications/Utilities/Console.app",
+        collectorID: "security.logs"))
+    _ = try await store.reconcile([outageFinding], retentionDays: 30)
+    storedFindings = try await store.reconcile(
+      [], retentionDays: 30, preserveSubjectIDs: [outageFinding.effectiveSubjectID])
+    try expect(
+      storedFindings.first(where: { $0.id == outageFinding.id })?.isActive == true,
+      "collector outage preserves active finding")
+    let incomplete = SystemIntegritySnapshot(
+      unavailableSources: ["security.firewall"], checkedSources: ["security.filevault"])
+    try expect(!incomplete.coverageReport.isSuitableForBaseline, "critical baseline coverage")
+    let sourcedOld = IntegrityArtifact(
+      kind: .launchAgent, identifier: "com.example.agent", digest: "same")
+    let sourcedNew = IntegrityArtifact(
+      kind: .launchAgent, identifier: "com.example.agent", digest: "same",
+      source: IntegrityFindingSource(
+        kind: .file, title: "Agent", locator: "/Library/LaunchAgents/example.plist"))
+    let sourceOnlyResult = SystemIntegrityRuleEngine().evaluate(
+      baseline: SystemIntegritySnapshot(artifacts: [sourcedOld]),
+      current: SystemIntegritySnapshot(artifacts: [sourcedNew]))
+    try expect(sourceOnlyResult.findings.isEmpty, "source metadata does not trigger finding")
+
+    let migrationDirectory = temporaryDirectory("integrity-migration")
+    defer { try? FileManager.default.removeItem(at: migrationDirectory) }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    encoder.dateEncodingStrategy = .iso8601
+    let snapshotData = try encoder.encode(baseline)
+    let snapshotObject = try JSONSerialization.jsonObject(with: snapshotData)
+    let legacyHash = IntegrityHash.sha256(
+      Data("middleai-integrity-baseline-v1|".utf8) + snapshotData)
+    let legacyDocument: [String: Any] = [
+      "version": 1, "snapshot": snapshotObject, "hash": legacyHash,
+    ]
+    try JSONSerialization.data(withJSONObject: legacyDocument).write(
+      to: migrationDirectory.appendingPathComponent("baseline.json"))
+    let migrationStore = SystemIntegrityStore(
+      directory: migrationDirectory, authenticationKey: Data(repeating: 0x53, count: 32))
+    _ = try await migrationStore.baseline()
+    let migratedDocument =
+      try JSONSerialization.jsonObject(
+        with: Data(contentsOf: migrationDirectory.appendingPathComponent("baseline.json")))
+      as? [String: Any]
+    try expect(
+      migratedDocument?["version"] as? Int == 2
+        && migratedDocument?["authenticationCode"] as? String != nil,
+      "legacy baseline HMAC migration")
   }
 
   static func testVoiceAndMeetingFeatures() async throws {

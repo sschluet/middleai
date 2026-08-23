@@ -62,7 +62,8 @@ final class SystemIntegrityMonitorTests: XCTestCase {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-integrity-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = SystemIntegrityStore(directory: directory)
+    let store = SystemIntegrityStore(
+      directory: directory, authenticationKey: Data(repeating: 0x42, count: 32))
     let snapshot = SystemIntegritySnapshot(states: ["security.firewall": "enabled"])
     try await store.saveBaseline(snapshot)
     let restoredBaseline = try await store.baseline()
@@ -88,5 +89,47 @@ final class SystemIntegrityMonitorTests: XCTestCase {
       _ = try await store.findings()
       XCTFail("Manipulierte Historie wurde akzeptiert")
     } catch {}
+  }
+
+  func testCoverageBlocksBaselineWhenCriticalSourceIsMissing() {
+    let snapshot = SystemIntegritySnapshot(
+      unavailableSources: ["security.firewall"], checkedSources: ["security.filevault"])
+
+    XCTAssertFalse(snapshot.coverageReport.isSuitableForBaseline)
+    XCTAssertTrue(snapshot.coverageReport.criticalGaps.contains { $0.id == "security.firewall" })
+  }
+
+  func testFindingLifecycleAcknowledgesResolvesAndReopens() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "middleai-integrity-lifecycle-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = SystemIntegrityStore(
+      directory: directory, authenticationKey: Data(repeating: 0x24, count: 32))
+    let finding = IntegrityFinding(
+      severity: .warning, category: .persistence, title: "Neuer Autostart",
+      detail: "Test", subjectMaterial: "autostart")
+
+    var history = try await store.reconcile([finding], retentionDays: 30)
+    XCTAssertEqual(history.first?.lifecycleState, .new)
+    history = try await store.acknowledge(finding.id)
+    XCTAssertEqual(history.first?.lifecycleState, .acknowledged)
+    history = try await store.reconcile([], retentionDays: 30)
+    XCTAssertEqual(history.first?.lifecycleState, .resolved)
+    history = try await store.reconcile([finding], retentionDays: 30)
+    XCTAssertEqual(history.first?.lifecycleState, .new)
+  }
+
+  func testSourceMetadataDoesNotCreateFalseArtifactChange() {
+    let old = IntegrityArtifact(
+      kind: .launchAgent, identifier: "com.example.agent", digest: "same")
+    let new = IntegrityArtifact(
+      kind: .launchAgent, identifier: "com.example.agent", digest: "same",
+      source: IntegrityFindingSource(kind: .file, title: "Agent", locator: "/Library/agent"))
+
+    let result = SystemIntegrityRuleEngine().evaluate(
+      baseline: SystemIntegritySnapshot(artifacts: [old]),
+      current: SystemIntegritySnapshot(artifacts: [new]))
+
+    XCTAssertTrue(result.findings.isEmpty)
   }
 }

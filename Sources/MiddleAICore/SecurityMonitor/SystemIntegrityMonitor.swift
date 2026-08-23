@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 
 public enum IntegritySeverity: Int, Codable, CaseIterable, Comparable, Sendable {
   case info = 0
@@ -41,15 +42,50 @@ public enum IntegrityCategory: String, Codable, CaseIterable, Sendable {
   }
 }
 
+public enum IntegritySourceKind: String, Codable, Sendable {
+  case file
+  case systemSettings
+  case application
+  case console
+  case keychain
+  case profile
+}
+
+public struct IntegrityFindingSource: Codable, Equatable, Hashable, Sendable {
+  public var kind: IntegritySourceKind
+  public var title: String
+  /// A collector-controlled local path, application path or System Settings URL.
+  public var locator: String
+  public var detail: String?
+  /// Stable coverage identifier used to keep findings open during a collector outage.
+  public var collectorID: String?
+
+  public init(
+    kind: IntegritySourceKind, title: String, locator: String, detail: String? = nil,
+    collectorID: String? = nil
+  ) {
+    self.kind = kind
+    self.title = String(title.prefix(160))
+    self.locator = String(locator.prefix(1_000))
+    self.detail = detail.map { String($0.prefix(300)) }
+    self.collectorID = collectorID.map { String($0.prefix(160)) }
+  }
+}
+
 public struct IntegrityArtifact: Codable, Equatable, Hashable, Sendable {
   public enum Kind: String, Codable, Sendable {
     case configurationProfile
     case managedPreference
     case systemExtension
+    case systemCertificate
     case launchAgent
     case launchDaemon
     case privilegedHelper
     case rootCertificate
+    case loginItem
+    case scheduledTask
+    case authorizedKey
+    case shellStartup
   }
 
   public var kind: Kind
@@ -57,16 +93,21 @@ public struct IntegrityArtifact: Codable, Equatable, Hashable, Sendable {
   public var digest: String
   public var teamIdentifier: String?
   public var signed: Bool?
+  public var source: IntegrityFindingSource?
+  public var risk: IntegritySeverity?
 
   public init(
     kind: Kind, identifier: String, digest: String, teamIdentifier: String? = nil,
-    signed: Bool? = nil
+    signed: Bool? = nil, source: IntegrityFindingSource? = nil,
+    risk: IntegritySeverity? = nil
   ) {
     self.kind = kind
     self.identifier = String(identifier.prefix(300))
     self.digest = digest
     self.teamIdentifier = teamIdentifier.map { String($0.prefix(80)) }
     self.signed = signed
+    self.source = source
+    self.risk = risk
   }
 
   public var stableKey: String { "\(kind.rawValue)|\(identifier.lowercased())" }
@@ -78,16 +119,18 @@ public struct IntegritySignal: Codable, Equatable, Hashable, Sendable {
   public var summary: String
   public var severity: IntegritySeverity
   public var count: Int
+  public var source: IntegrityFindingSource?
 
   public init(
     category: IntegrityCategory, identifier: String, summary: String,
-    severity: IntegritySeverity, count: Int = 1
+    severity: IntegritySeverity, count: Int = 1, source: IntegrityFindingSource? = nil
   ) {
     self.category = category
     self.identifier = String(identifier.prefix(200))
     self.summary = Self.safeSummary(summary)
     self.severity = severity
     self.count = max(1, count)
+    self.source = source
   }
 
   private static func safeSummary(_ value: String) -> String {
@@ -99,7 +142,7 @@ public struct IntegritySignal: Codable, Equatable, Hashable, Sendable {
 }
 
 public struct SystemIntegritySnapshot: Codable, Equatable, Sendable {
-  public static let currentVersion = 1
+  public static let currentVersion = 2
   public var version: Int
   public var capturedAt: Date
   /// Values are deliberately normalized states or hashes, never complete command output.
@@ -107,11 +150,12 @@ public struct SystemIntegritySnapshot: Codable, Equatable, Sendable {
   public var artifacts: [IntegrityArtifact]
   public var signals: [IntegritySignal]
   public var unavailableSources: [String]
+  public var checkedSources: [String]?
 
   public init(
     capturedAt: Date = Date(), states: [String: String] = [:],
     artifacts: [IntegrityArtifact] = [], signals: [IntegritySignal] = [],
-    unavailableSources: [String] = []
+    unavailableSources: [String] = [], checkedSources: [String] = []
   ) {
     self.version = Self.currentVersion
     self.capturedAt = capturedAt
@@ -121,6 +165,7 @@ public struct SystemIntegritySnapshot: Codable, Equatable, Sendable {
     }.sorted { $0.stableKey < $1.stableKey }
     self.signals = signals
     self.unavailableSources = unavailableSources.sorted()
+    self.checkedSources = checkedSources.sorted()
   }
 
   public var fingerprint: String {
@@ -144,6 +189,85 @@ public struct SystemIntegritySnapshot: Codable, Equatable, Sendable {
   }
 }
 
+public struct IntegrityCoverageGap: Equatable, Identifiable, Sendable {
+  public var id: String
+  public var title: String
+  public var critical: Bool
+
+  public init(id: String, title: String, critical: Bool) {
+    self.id = id
+    self.title = title
+    self.critical = critical
+  }
+}
+
+public struct IntegrityCoverageReport: Equatable, Sendable {
+  public var checkedCount: Int
+  public var expectedCount: Int
+  public var gaps: [IntegrityCoverageGap]
+
+  public var criticalGaps: [IntegrityCoverageGap] { gaps.filter(\.critical) }
+  public var isSuitableForBaseline: Bool { criticalGaps.isEmpty }
+}
+
+extension SystemIntegritySnapshot {
+  public var coverageReport: IntegrityCoverageReport {
+    let checked = Set(checkedSources ?? [])
+    let unavailable = Set(unavailableSources)
+    let gaps = Self.coverageSources.compactMap { source -> IntegrityCoverageGap? in
+      guard !checked.contains(source.id) || unavailable.contains(source.id) else { return nil }
+      return source
+    }
+    return IntegrityCoverageReport(
+      checkedCount: Self.coverageSources.count - gaps.count,
+      expectedCount: Self.coverageSources.count, gaps: gaps)
+  }
+
+  private static let coverageSources: [IntegrityCoverageGap] = [
+    .init(id: "security.firewall", title: "Firewall", critical: true),
+    .init(id: "security.filevault", title: "FileVault", critical: true),
+    .init(id: "security.gatekeeper", title: "Gatekeeper", critical: true),
+    .init(id: "security.sip", title: "Systemintegritätsschutz", critical: true),
+    .init(id: "mdm.enrollment", title: "MDM-Anmeldung", critical: true),
+    .init(id: "identity.admin_members", title: "Lokale Administratoren", critical: true),
+    .init(id: "identity.local_users", title: "Lokale Benutzer", critical: true),
+    .init(id: "artifacts.configurationProfile", title: "Konfigurationsprofile", critical: true),
+    .init(id: "artifacts.launchAgent", title: "LaunchAgents", critical: true),
+    .init(id: "artifacts.launchDaemon", title: "LaunchDaemons", critical: true),
+    .init(id: "artifacts.privilegedHelper", title: "Privilegierte Hilfsprogramme", critical: true),
+    .init(id: "middleai.bundle", title: "MiddleAI-Programmdatei", critical: true),
+    .init(id: "artifacts.managedPreference", title: "Verwaltete Einstellungen", critical: false),
+    .init(id: "artifacts.systemExtension", title: "Systemerweiterungen", critical: false),
+    .init(id: "artifacts.systemCertificate", title: "Systemzertifikate", critical: false),
+    .init(
+      id: "artifacts.rootCertificate", title: "Zertifikat-Vertrauensstellungen", critical: true),
+    .init(id: "security.logs", title: "Lokale Sicherheitslogs", critical: false),
+    .init(id: "defender.health", title: "Microsoft Defender", critical: false),
+    .init(id: "artifacts.loginItem", title: "Anmeldeobjekte", critical: false),
+    .init(id: "artifacts.scheduledTask", title: "Geplante Tasks", critical: true),
+    .init(id: "artifacts.authorizedKey", title: "Autorisierte SSH-Schlüssel", critical: true),
+    .init(id: "artifacts.shellStartup", title: "Shell-Startdateien", critical: false),
+  ]
+}
+
+public enum IntegrityFindingState: String, Codable, CaseIterable, Sendable {
+  case new
+  case ongoing
+  case escalated
+  case acknowledged
+  case resolved
+
+  public var title: String {
+    switch self {
+    case .new: return "Neu"
+    case .ongoing: return "Anhaltend"
+    case .escalated: return "Eskaliert"
+    case .acknowledged: return "Geprüft"
+    case .resolved: return "Behoben"
+    }
+  }
+}
+
 public struct IntegrityFinding: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var detectedAt: Date
@@ -155,11 +279,19 @@ public struct IntegrityFinding: Codable, Equatable, Identifiable, Sendable {
   public var occurrenceCount: Int
   public var localExplanation: String?
   public var simulated: Bool
+  public var subjectID: String?
+  public var state: IntegrityFindingState?
+  public var firstDetectedAt: Date?
+  public var resolvedAt: Date?
+  public var acknowledgedAt: Date?
+  public var acknowledgementNote: String?
+  public var source: IntegrityFindingSource?
 
   public init(
     detectedAt: Date = Date(), severity: IntegritySeverity, category: IntegrityCategory,
     title: String, detail: String, evidence: String = "", occurrenceCount: Int = 1,
-    localExplanation: String? = nil, simulated: Bool = false, identityMaterial: String? = nil
+    localExplanation: String? = nil, simulated: Bool = false, identityMaterial: String? = nil,
+    subjectMaterial: String? = nil, source: IntegrityFindingSource? = nil
   ) {
     self.detectedAt = detectedAt
     self.severity = severity
@@ -172,7 +304,19 @@ public struct IntegrityFinding: Codable, Equatable, Identifiable, Sendable {
     self.simulated = simulated
     self.id = IntegrityHash.sha256(
       identityMaterial ?? "\(category.rawValue)|\(self.title)|\(self.evidence)")
+    self.subjectID = IntegrityHash.sha256(
+      subjectMaterial ?? "\(category.rawValue)|\(self.title)")
+    self.state = .new
+    self.firstDetectedAt = detectedAt
+    self.resolvedAt = nil
+    self.acknowledgedAt = nil
+    self.acknowledgementNote = nil
+    self.source = source
   }
+
+  public var lifecycleState: IntegrityFindingState { state ?? .new }
+  public var effectiveSubjectID: String { subjectID ?? id }
+  public var isActive: Bool { lifecycleState != .resolved }
 }
 
 public struct IntegrityScanResult: Equatable, Sendable {
@@ -226,7 +370,7 @@ public struct SystemIntegrityRuleEngine: Sendable {
       switch (oldArtifacts[key], newArtifacts[key]) {
       case (nil, let artifact?): findings.append(artifactAdded(artifact, now: now))
       case (let artifact?, nil): findings.append(artifactRemoved(artifact, now: now))
-      case (let old?, let new?) where old != new:
+      case (let old?, let new?) where Self.artifactContentChanged(old, new):
         findings.append(artifactChanged(old: old, new: new, now: now))
       default: break
       }
@@ -250,20 +394,23 @@ public struct SystemIntegrityRuleEngine: Sendable {
         title: "Test: Intune-Profil aktualisiert",
         detail:
           "Ein verwaltetes Profil wurde ohne erkennbare Sicherheitsverschlechterung geändert.",
-        evidence: "Interne Simulation · keine Systemeinstellung wurde verändert", simulated: true)
+        evidence: "Interne Simulation · keine Systemeinstellung wurde verändert", simulated: true,
+        subjectMaterial: "simulation-info")
     case .warning:
       return IntegrityFinding(
         detectedAt: now, severity: .warning, category: .persistence,
         title: "Test: Neuer LaunchAgent",
         detail: "Ein neuer signierter Autostarteintrag weicht vom bestätigten Sollzustand ab.",
-        evidence: "Interne Simulation · keine Datei wurde angelegt", simulated: true)
+        evidence: "Interne Simulation · keine Datei wurde angelegt", simulated: true,
+        subjectMaterial: "simulation-warning")
     case .critical:
       return IntegrityFinding(
         detectedAt: now, severity: .critical, category: .securityConfiguration,
         title: "Test: Firewall deaktiviert",
         detail:
           "Eine zentrale Schutzfunktion wurde gegenüber dem bestätigten Sollzustand abgeschwächt.",
-        evidence: "Interne Simulation · die Firewall blieb unverändert", simulated: true)
+        evidence: "Interne Simulation · die Firewall blieb unverändert", simulated: true,
+        subjectMaterial: "simulation-critical")
     }
   }
 
@@ -284,13 +431,18 @@ public struct SystemIntegrityRuleEngine: Sendable {
       detail: "Der aktuelle Zustand weicht von der ausdrücklich bestätigten Baseline ab.",
       evidence:
         "Vorher: \(Self.redactedValue(old, key: key)) · Jetzt: \(Self.redactedValue(new, key: key))",
-      identityMaterial: "state|\(key)|\(old)|\(new)")
+      identityMaterial: "state|\(key)|\(old)|\(new)", subjectMaterial: "state|\(key)",
+      source: Self.source(forStateKey: key))
   }
 
   private func artifactAdded(_ artifact: IntegrityArtifact, now: Date) -> IntegrityFinding {
     let metadata = Self.artifactMetadata(artifact.kind)
     let unsignedCritical = artifact.signed == false && artifact.kind != .configurationProfile
-    let severity: IntegritySeverity = unsignedCritical ? .critical : metadata.severity
+    let severity: IntegritySeverity =
+      unsignedCritical
+      ? .critical
+      : max(
+        artifact.risk ?? metadata.severity, metadata.severity)
     return IntegrityFinding(
       detectedAt: now, severity: severity, category: metadata.category,
       title: "Neu: \(artifact.identifier)",
@@ -298,18 +450,20 @@ public struct SystemIntegrityRuleEngine: Sendable {
         ? "Ein nicht gültig signierter Persistenz- oder Systemeintrag wurde hinzugefügt."
         : "Ein neuer \(metadata.singular) weicht vom bestätigten Sollzustand ab.",
       evidence: Self.artifactEvidence(artifact),
-      identityMaterial: "artifact-added|\(artifact.stableKey)|\(artifact.digest)")
+      identityMaterial: "artifact-added|\(artifact.stableKey)|\(artifact.digest)",
+      subjectMaterial: "artifact|\(artifact.stableKey)", source: artifact.source)
   }
 
   private func artifactRemoved(_ artifact: IntegrityArtifact, now: Date) -> IntegrityFinding {
     let metadata = Self.artifactMetadata(artifact.kind)
-    let severity: IntegritySeverity = artifact.kind == .configurationProfile ? .warning : .warning
+    let severity = max(artifact.risk ?? .warning, .warning)
     return IntegrityFinding(
       detectedAt: now, severity: severity, category: metadata.category,
       title: "Entfernt: \(artifact.identifier)",
       detail: "Ein zuvor bestätigter \(metadata.singular) ist nicht mehr vorhanden.",
       evidence: Self.artifactEvidence(artifact),
-      identityMaterial: "artifact-removed|\(artifact.stableKey)|\(artifact.digest)")
+      identityMaterial: "artifact-removed|\(artifact.stableKey)|\(artifact.digest)",
+      subjectMaterial: "artifact|\(artifact.stableKey)", source: artifact.source)
   }
 
   private func artifactChanged(
@@ -318,13 +472,15 @@ public struct SystemIntegrityRuleEngine: Sendable {
     let metadata = Self.artifactMetadata(new.kind)
     let signatureRegressed = old.signed != false && new.signed == false
     return IntegrityFinding(
-      detectedAt: now, severity: signatureRegressed ? .critical : .warning,
+      detectedAt: now,
+      severity: signatureRegressed ? .critical : max(new.risk ?? old.risk ?? .warning, .warning),
       category: metadata.category, title: "Verändert: \(new.identifier)",
       detail: signatureRegressed
         ? "Die Signatur eines zuvor bestätigten Eintrags ist nicht mehr gültig."
         : "Der Inhalt eines bestätigten \(metadata.singular) wurde verändert.",
       evidence: Self.artifactEvidence(new),
-      identityMaterial: "artifact-changed|\(new.stableKey)|\(old.digest)|\(new.digest)")
+      identityMaterial: "artifact-changed|\(new.stableKey)|\(old.digest)|\(new.digest)",
+      subjectMaterial: "artifact|\(new.stableKey)", source: new.source ?? old.source)
   }
 
   private func finding(for signal: IntegritySignal, now: Date) -> IntegrityFinding {
@@ -333,7 +489,8 @@ public struct SystemIntegrityRuleEngine: Sendable {
       title: signal.summary, detail: "Das Ereignis wurde in lokalen macOS-Daten erkannt.",
       evidence: signal.count > 1 ? "\(signal.count) gleichartige Ereignisse" : "Ein Ereignis",
       occurrenceCount: signal.count,
-      identityMaterial: "signal|\(signal.identifier)|\(signal.summary)")
+      identityMaterial: "signal|\(signal.identifier)|\(signal.summary)",
+      subjectMaterial: "signal|\(signal.identifier)", source: signal.source)
   }
 
   private static func sortFindings(_ lhs: IntegrityFinding, _ rhs: IntegrityFinding) -> Bool {
@@ -343,7 +500,8 @@ public struct SystemIntegrityRuleEngine: Sendable {
 
   private static let securityDegradationKeys: Set<String> = [
     "security.firewall", "security.filevault", "security.gatekeeper", "security.sip",
-    "security.stealth_mode",
+    "security.stealth_mode", "defender.healthy", "defender.licensed",
+    "defender.installed", "defender.real_time_protection", "defender.full_disk_access",
   ]
 
   private static let stateMetadata: [String: (IntegritySeverity, IntegrityCategory, String)] = [
@@ -364,6 +522,31 @@ public struct SystemIntegrityRuleEngine: Sendable {
     "network.proxy": (.warning, .network, "Proxy-Konfiguration verändert"),
     "network.dns": (.warning, .network, "DNS-Konfiguration verändert"),
     "middleai.bundle": (.critical, .middleAI, "MiddleAI-Programmdatei verändert"),
+    "defender.installed": (
+      .critical, .securityConfiguration, "Microsoft Defender Installation verändert"
+    ),
+    "defender.healthy": (.warning, .securityConfiguration, "Microsoft Defender Zustand verändert"),
+    "defender.licensed": (
+      .critical, .securityConfiguration, "Microsoft Defender Lizenzstatus verändert"
+    ),
+    "defender.real_time_protection": (
+      .critical, .securityConfiguration, "Microsoft Defender Echtzeitschutz verändert"
+    ),
+    "defender.network_protection": (
+      .warning, .securityConfiguration, "Microsoft Defender Netzwerkschutz verändert"
+    ),
+    "defender.definitions": (
+      .warning, .securityConfiguration, "Microsoft Defender Definitionen verändert"
+    ),
+    "defender.full_disk_access": (
+      .critical, .securityConfiguration, "Microsoft Defender Festplattenzugriff verändert"
+    ),
+    "defender.tamper_protection": (
+      .critical, .securityConfiguration, "Microsoft Defender Manipulationsschutz verändert"
+    ),
+    "defender.passive_mode": (
+      .warning, .securityConfiguration, "Microsoft Defender Betriebsmodus verändert"
+    ),
   ]
 
   private static func artifactMetadata(_ kind: IntegrityArtifact.Kind) -> (
@@ -373,10 +556,15 @@ public struct SystemIntegrityRuleEngine: Sendable {
     case .configurationProfile: return (.warning, .deviceManagement, "Konfigurationsprofil")
     case .managedPreference: return (.warning, .deviceManagement, "verwaltete Einstellung")
     case .systemExtension: return (.warning, .securityConfiguration, "Systemerweiterung")
+    case .systemCertificate: return (.warning, .certificates, "Systemzertifikat")
     case .launchAgent: return (.warning, .persistence, "LaunchAgent")
     case .launchDaemon: return (.warning, .persistence, "LaunchDaemon")
     case .privilegedHelper: return (.critical, .persistence, "privilegierter Hilfsprozess")
     case .rootCertificate: return (.critical, .certificates, "Root-Zertifikat")
+    case .loginItem: return (.warning, .persistence, "Anmeldeobjekt")
+    case .scheduledTask: return (.warning, .persistence, "geplanter Task")
+    case .authorizedKey: return (.critical, .persistence, "autorisierter SSH-Schlüssel")
+    case .shellStartup: return (.warning, .persistence, "Shell-Startdatei")
     }
   }
 
@@ -387,6 +575,13 @@ public struct SystemIntegrityRuleEngine: Sendable {
       parts.append(signed ? "Signatur gültig" : "Signatur ungültig")
     }
     return parts.joined(separator: " · ")
+  }
+
+  private static func artifactContentChanged(
+    _ old: IntegrityArtifact, _ new: IntegrityArtifact
+  ) -> Bool {
+    old.digest != new.digest || old.teamIdentifier != new.teamIdentifier
+      || old.signed != new.signed
   }
 
   private static func redactedValue(_ value: String, key: String) -> String {
@@ -404,6 +599,49 @@ public struct SystemIntegrityRuleEngine: Sendable {
     return normalized.contains("disabled") || normalized.contains("off")
       || normalized == "false" || normalized == "0"
   }
+
+  private static func source(forStateKey key: String) -> IntegrityFindingSource? {
+    let privacy = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+    switch key {
+    case "security.firewall", "network.proxy", "network.dns":
+      return IntegrityFindingSource(
+        kind: .systemSettings, title: "Netzwerkeinstellungen",
+        locator: "x-apple.systempreferences:com.apple.Network-Settings.extension",
+        collectorID: key)
+    case "security.filevault", "security.gatekeeper", "security.sip":
+      return IntegrityFindingSource(
+        kind: .systemSettings, title: "Datenschutz & Sicherheit", locator: privacy,
+        collectorID: key)
+    case "security.remote_login", "security.remote_management":
+      return IntegrityFindingSource(
+        kind: .systemSettings, title: "Freigaben",
+        locator: "x-apple.systempreferences:com.apple.Sharing-Settings.extension",
+        collectorID: key)
+    case "mdm.enrollment", "mdm.server":
+      return IntegrityFindingSource(
+        kind: .profile, title: "Geräteverwaltung",
+        locator: "x-apple.systempreferences:com.apple.Profiles-Settings.extension",
+        collectorID: key)
+    case "identity.admin_members", "identity.local_users":
+      return IntegrityFindingSource(
+        kind: .systemSettings, title: "Benutzer & Gruppen",
+        locator: "x-apple.systempreferences:com.apple.Users-Groups-Settings.extension",
+        collectorID: key)
+    case "certificates.system_roots":
+      return IntegrityFindingSource(
+        kind: .keychain, title: "Schlüsselbundverwaltung",
+        locator: "/System/Applications/Utilities/Keychain Access.app", collectorID: key)
+    case "middleai.bundle":
+      return IntegrityFindingSource(
+        kind: .file, title: "MiddleAI.app", locator: "/Applications/MiddleAI.app",
+        collectorID: key)
+    case _ where key.hasPrefix("defender."):
+      return IntegrityFindingSource(
+        kind: .application, title: "Microsoft Defender",
+        locator: "/Applications/Microsoft Defender.app", collectorID: "defender.health")
+    default: return nil
+    }
+  }
 }
 
 public enum IntegrityHistoryStatus: Equatable, Sendable {
@@ -414,17 +652,20 @@ public enum IntegrityHistoryStatus: Equatable, Sendable {
 
 public actor SystemIntegrityStore {
   private struct BaselineDocument: Codable {
-    var version = 1
+    var version: Int
     var snapshot: SystemIntegritySnapshot
-    var hash: String
+    var hash: String?
+    var authenticationCode: String?
   }
   private struct HistoryRecord: Codable {
     var finding: IntegrityFinding
-    var previousHash: String
-    var hash: String
+    var previousHash: String?
+    var hash: String?
+    var previousAuthenticationCode: String?
+    var authenticationCode: String?
   }
   private struct HistoryDocument: Codable {
-    var version = 1
+    var version: Int
     var records: [HistoryRecord]
   }
 
@@ -433,23 +674,43 @@ public actor SystemIntegrityStore {
   }
 
   private let directory: URL
+  private let providedAuthenticationKey: Data?
+  private var cachedAuthenticationKey: Data?
   private var historyStatus: IntegrityHistoryStatus = .empty
 
-  public init(directory: URL = defaultDirectory) { self.directory = directory }
+  public init(directory: URL = defaultDirectory, authenticationKey: Data? = nil) {
+    self.directory = directory
+    self.providedAuthenticationKey = authenticationKey
+  }
 
   public func baseline() throws -> SystemIntegritySnapshot? {
     guard let document = try decodeIfPresent(BaselineDocument.self, from: baselineURL) else {
       return nil
     }
-    guard document.hash == Self.baselineHash(document.snapshot) else {
+    let valid: Bool
+    if document.version >= 2, let code = document.authenticationCode {
+      valid =
+        code
+        == Self.authenticationCode(
+          for: Self.encoded(document.snapshot), domain: "baseline-v2", key: try authenticationKey())
+    } else {
+      valid = document.hash == Self.legacyBaselineHash(document.snapshot)
+    }
+    guard valid else {
       throw MiddleAIError.configuration("Die lokale Integritäts-Baseline wurde verändert.")
     }
+    // A locked Keychain must not make a previously valid baseline unreadable. Migration is retried
+    // on the next read; creating or replacing a baseline still fails closed when HMAC is unavailable.
+    if document.version < 2 { try? saveBaseline(document.snapshot) }
     return document.snapshot
   }
 
   public func saveBaseline(_ snapshot: SystemIntegritySnapshot) throws {
+    let code = Self.authenticationCode(
+      for: Self.encoded(snapshot), domain: "baseline-v2", key: try authenticationKey())
     try secureWrite(
-      BaselineDocument(snapshot: snapshot, hash: Self.baselineHash(snapshot)), to: baselineURL)
+      BaselineDocument(version: 2, snapshot: snapshot, hash: nil, authenticationCode: code),
+      to: baselineURL)
   }
 
   public func removeBaseline() throws {
@@ -463,40 +724,111 @@ public actor SystemIntegrityStore {
       historyStatus = .empty
       return []
     }
-    guard Self.valid(document.records) else {
+    let valid: Bool
+    if document.version >= 2 {
+      valid = Self.validAuthenticated(document.records, key: try authenticationKey())
+    } else {
+      valid = Self.validLegacy(document.records)
+    }
+    guard valid else {
       historyStatus = .corrupted
       throw MiddleAIError.configuration(
-        "Die lokale Integritätshistorie hat eine ungültige Hash-Kette.")
+        "Die lokale Integritätshistorie konnte kryptografisch nicht bestätigt werden.")
     }
     historyStatus = .valid(document.records.count)
-    return document.records.map(\.finding).sorted { $0.detectedAt > $1.detectedAt }
+    let findings = document.records.map(\.finding).sorted { $0.detectedAt > $1.detectedAt }
+    if document.version < 2 { try? saveHistory(findings) }
+    return findings
   }
 
-  public func append(_ additions: [IntegrityFinding], retentionDays: Int, now: Date = Date()) throws
-  {
-    guard !additions.isEmpty else { return }
+  @discardableResult
+  public func reconcile(
+    _ current: [IntegrityFinding], retentionDays: Int, now: Date = Date(),
+    preserveSubjectIDs: Set<String> = []
+  ) throws -> [IntegrityFinding] {
     var existing = try findings()
-    for finding in additions where !finding.simulated {
+    let current = current.filter { !$0.simulated }
+    let activeCurrentIDs = Set(current.map(\.id))
+    let activeCurrentSubjects = Set(current.map(\.effectiveSubjectID))
+
+    for index in existing.indices
+    where existing[index].isActive
+      && !activeCurrentIDs.contains(existing[index].id)
+      && !activeCurrentSubjects.contains(existing[index].effectiveSubjectID)
+      && !preserveSubjectIDs.contains(existing[index].effectiveSubjectID)
+    {
+      existing[index].state = .resolved
+      existing[index].resolvedAt = now
+    }
+
+    for var finding in current {
       if let index = existing.firstIndex(where: { $0.id == finding.id }) {
+        let wasResolved = existing[index].lifecycleState == .resolved
         existing[index].detectedAt = finding.detectedAt
-        existing[index].occurrenceCount += finding.occurrenceCount
+        existing[index].occurrenceCount =
+          wasResolved
+          ? finding.occurrenceCount : existing[index].occurrenceCount + finding.occurrenceCount
         existing[index].severity = max(existing[index].severity, finding.severity)
         existing[index].localExplanation =
           finding.localExplanation ?? existing[index].localExplanation
+        existing[index].source = finding.source ?? existing[index].source
+        existing[index].resolvedAt = nil
+        if wasResolved {
+          existing[index].state = .new
+          existing[index].firstDetectedAt = now
+          existing[index].acknowledgedAt = nil
+          existing[index].acknowledgementNote = nil
+        } else if existing[index].lifecycleState != .acknowledged {
+          existing[index].state = .ongoing
+        }
+      } else if let index = existing.firstIndex(where: {
+        $0.isActive && $0.effectiveSubjectID == finding.effectiveSubjectID
+      }) {
+        let previousSeverity = existing[index].severity
+        existing[index].state = .resolved
+        existing[index].resolvedAt = now
+        finding.state = finding.severity > previousSeverity ? .escalated : .new
+        finding.firstDetectedAt = now
+        existing.append(finding)
       } else {
+        finding.state = .new
+        finding.firstDetectedAt = now
         existing.append(finding)
       }
     }
     if retentionDays > 0,
       let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: now)
     {
-      existing.removeAll { $0.detectedAt < cutoff }
+      existing.removeAll {
+        ($0.resolvedAt ?? $0.detectedAt) < cutoff && $0.lifecycleState == .resolved
+      }
     }
     existing.sort { $0.detectedAt < $1.detectedAt }
     if existing.count > 500 { existing.removeFirst(existing.count - 500) }
-    let records = Self.records(for: existing)
-    try secureWrite(HistoryDocument(records: records), to: historyURL)
-    historyStatus = .valid(records.count)
+    try saveHistory(existing)
+    return existing.sorted { $0.detectedAt > $1.detectedAt }
+  }
+
+  /// Compatibility helper for callers that only add findings. New scans should use `reconcile`.
+  public func append(_ additions: [IntegrityFinding], retentionDays: Int, now: Date = Date()) throws
+  {
+    _ = try reconcile(additions, retentionDays: retentionDays, now: now)
+  }
+
+  @discardableResult
+  public func acknowledge(
+    _ id: String, note: String? = nil, now: Date = Date()
+  ) throws -> [IntegrityFinding] {
+    var existing = try findings()
+    guard let index = existing.firstIndex(where: { $0.id == id && $0.isActive }) else {
+      return existing
+    }
+    existing[index].state = .acknowledged
+    existing[index].acknowledgedAt = now
+    let cleaned = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+    existing[index].acknowledgementNote = cleaned.map { String($0.prefix(300)) }
+    try saveHistory(existing)
+    return existing.sorted { $0.detectedAt > $1.detectedAt }
   }
 
   public func clearFindings() throws {
@@ -532,37 +864,126 @@ public actor SystemIntegrityStore {
     return try decoder.decode(type, from: Data(contentsOf: url))
   }
 
-  private static func records(for findings: [IntegrityFinding]) -> [HistoryRecord] {
-    var previous = "middleai-integrity-history-v1"
+  private func saveHistory(_ findings: [IntegrityFinding]) throws {
+    let records = Self.authenticatedRecords(for: findings, key: try authenticationKey())
+    try secureWrite(HistoryDocument(version: 2, records: records), to: historyURL)
+    historyStatus = .valid(records.count)
+  }
+
+  private func authenticationKey() throws -> Data {
+    if let providedAuthenticationKey { return providedAuthenticationKey }
+    if let cachedAuthenticationKey { return cachedAuthenticationKey }
+    let service = "de.middleai.system-integrity"
+    let account = "local-authentication-key"
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    let readStatus = SecItemCopyMatching(query as CFDictionary, &item)
+    if readStatus == errSecSuccess, let data = item as? Data, data.count >= 32 {
+      cachedAuthenticationKey = data
+      return data
+    }
+    guard readStatus == errSecItemNotFound else {
+      throw MiddleAIError.configuration(
+        "Der lokale Schlüssel für den Systemwächter ist nicht verfügbar (\(readStatus)).")
+    }
+    var bytes = [UInt8](repeating: 0, count: 32)
+    guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+      throw MiddleAIError.configuration(
+        "Der lokale Systemwächter-Schlüssel konnte nicht erzeugt werden.")
+    }
+    let key = Data(bytes)
+    var add = query
+    add.removeValue(forKey: kSecReturnData as String)
+    add.removeValue(forKey: kSecMatchLimit as String)
+    add[kSecValueData as String] = key
+    add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let addStatus = SecItemAdd(add as CFDictionary, nil)
+    guard addStatus == errSecSuccess || addStatus == errSecDuplicateItem else {
+      throw MiddleAIError.configuration(
+        "Der lokale Systemwächter-Schlüssel konnte nicht gespeichert werden (\(addStatus)).")
+    }
+    if addStatus == errSecDuplicateItem {
+      var retry: CFTypeRef?
+      guard SecItemCopyMatching(query as CFDictionary, &retry) == errSecSuccess,
+        let stored = retry as? Data
+      else { throw MiddleAIError.configuration("Der Systemwächter-Schlüssel ist nicht lesbar.") }
+      cachedAuthenticationKey = stored
+      return stored
+    }
+    cachedAuthenticationKey = key
+    return key
+  }
+
+  private static func authenticatedRecords(
+    for findings: [IntegrityFinding], key: Data
+  ) -> [HistoryRecord] {
+    var previous = "middleai-integrity-history-v2"
     return findings.map { finding in
       let material = canonical(finding)
-      let hash = IntegrityHash.sha256("\(previous)|\(material)")
-      defer { previous = hash }
-      return HistoryRecord(finding: finding, previousHash: previous, hash: hash)
+      let code = authenticationCode(
+        for: Data("\(previous)|\(material)".utf8), domain: "history-v2", key: key)
+      defer { previous = code }
+      return HistoryRecord(
+        finding: finding, previousHash: nil, hash: nil,
+        previousAuthenticationCode: previous, authenticationCode: code)
     }
   }
 
-  private static func valid(_ records: [HistoryRecord]) -> Bool {
-    var previous = "middleai-integrity-history-v1"
+  private static func validAuthenticated(_ records: [HistoryRecord], key: Data) -> Bool {
+    var previous = "middleai-integrity-history-v2"
     for record in records {
-      guard record.previousHash == previous,
-        record.hash == IntegrityHash.sha256("\(previous)|\(canonical(record.finding))")
+      let expected = authenticationCode(
+        for: Data("\(previous)|\(canonical(record.finding))".utf8), domain: "history-v2",
+        key: key)
+      guard record.previousAuthenticationCode == previous,
+        record.authenticationCode == expected
       else { return false }
-      previous = record.hash
+      previous = expected
     }
     return true
   }
 
-  private static func canonical(_ finding: IntegrityFinding) -> String {
+  private static func validLegacy(_ records: [HistoryRecord]) -> Bool {
+    var previous = "middleai-integrity-history-v1"
+    for record in records {
+      guard let hash = record.hash, record.previousHash == previous,
+        hash == IntegrityHash.sha256("\(previous)|\(legacyCanonical(record.finding))")
+      else { return false }
+      previous = hash
+    }
+    return true
+  }
+
+  private static func legacyCanonical(_ finding: IntegrityFinding) -> String {
     "\(finding.id)|\(Int(finding.detectedAt.timeIntervalSince1970))|\(finding.severity.rawValue)|\(finding.category.rawValue)|\(finding.title)|\(finding.detail)|\(finding.evidence)|\(finding.occurrenceCount)|\(finding.localExplanation ?? "")"
   }
 
-  private static func baselineHash(_ snapshot: SystemIntegritySnapshot) -> String {
+  private static func canonical(_ finding: IntegrityFinding) -> String {
+    encoded(finding).base64EncodedString()
+  }
+
+  private static func encoded<T: Encodable>(_ value: T) -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     encoder.dateEncodingStrategy = .iso8601
-    let encoded = (try? encoder.encode(snapshot)) ?? Data(snapshot.fingerprint.utf8)
-    return IntegrityHash.sha256(Data("middleai-integrity-baseline-v1|".utf8) + encoded)
+    return (try? encoder.encode(value)) ?? Data()
+  }
+
+  private static func authenticationCode(for data: Data, domain: String, key: Data) -> String {
+    let material = Data("middleai-integrity-\(domain)|".utf8) + data
+    return HMAC<SHA256>.authenticationCode(
+      for: material, using: SymmetricKey(data: key)
+    ).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private static func legacyBaselineHash(_ snapshot: SystemIntegritySnapshot) -> String {
+    IntegrityHash.sha256(Data("middleai-integrity-baseline-v1|".utf8) + encoded(snapshot))
   }
 }
 

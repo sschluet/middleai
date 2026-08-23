@@ -149,21 +149,29 @@ selected microphone and requests no Screen Recording permission.
 
 `SystemIntegrityCollector` invokes only fixed absolute macOS tool paths and bounded arguments; it
 never invokes a shell. It normalizes security states and stores hashes instead of full account,
-certificate, DNS or proxy output. It inventories configuration profiles, system extensions,
-LaunchAgents, LaunchDaemons and privileged helpers, including code-signing status where macOS
-exposes it. A small `DispatchSource` watcher coalesces changes in relevant directories, while
+certificate, DNS or proxy output. It inventories configuration profiles and security-relevant
+payload classes, individual system certificates and trust settings, system extensions, login
+items, crontab, SSH authorized keys, shell startup files, LaunchAgents, LaunchDaemons and privileged
+helpers, including code-signing status where macOS exposes it. An installed Microsoft Defender is
+queried locally through its fixed vendor executable and generates deterministic health signals.
+A small `DispatchSource` watcher coalesces changes in relevant directories, while
 `NSBackgroundActivityScheduler` performs the configurable periodic scan without a busy timer.
 
 `SystemIntegrityRuleEngine` is deterministic and assigns severity before any model is called. A
 temporarily unavailable source is excluded from comparison so a permission or command failure does
-not appear as a removal. The user must explicitly establish or replace the baseline. The baseline
-has a content hash, and the owner-only bounded finding history has a forward hash chain.
+not appear as a removal. The user must first inspect source coverage and then explicitly establish
+or replace the baseline; missing required sources block confirmation. Baseline and owner-only
+bounded history use HMAC-SHA256 with a random `ThisDeviceOnly` secret stored in the macOS Keychain.
+The history reconciler preserves New, Ongoing, Escalated, Reviewed and Resolved lifecycle states.
 
 Optional explanation runs at background priority through `InferenceScheduler` and accepts only
 Apple Intelligence or an OpenAI-compatible loopback Ollama/llama.cpp endpoint. There is no hosted
 fallback. Log-derived content is delimited as untrusted data and cannot change rule severity or
-execute an action. Notifications are per-finding deduplicated and rate-limited; spoken alerts are
-generic, severity-gated and quiet-hour aware.
+execute an action. Notifications and spoken alerts use separate per-finding cooldowns and counters;
+critical notices have their own reserve. Spoken alerts are generic, severity-gated, quiet-hour aware
+and globally cooled down. Source locators are collector-created typed values and the UI opens only
+allow-listed local paths, applications and System Settings URLs. A local timeline and Markdown
+report expose coverage and lifecycle without uploading telemetry.
 
 The shipping build intentionally does not use Endpoint Security or a system extension because those
 capabilities require Apple-controlled entitlements, Developer ID signing and notarization. The

@@ -2,6 +2,18 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.10.0 — 2026-08-23
+
+### Verifiable local system monitoring
+
+- Authenticated the baseline and finding-history chain with HMAC-SHA256 backed by a device-bound random macOS Keychain secret, including verified migration from the previous hash-only format.
+- Added a required source-coverage check before baseline confirmation and transparent critical versus optional coverage gaps.
+- Added New, Ongoing, Escalated, Reviewed and Resolved finding states with acknowledgement, open/resolved/all timeline filters and local Markdown report export.
+- Added safe one-click source opening for collector-controlled files, applications and System Settings panes.
+- Added semantic configuration-profile risk, individual certificate and trust-setting inventory, local Microsoft Defender health, login items, user crontab, SSH authorized keys and shell startup files.
+- Separated notification and voice cooldowns, reserved critical-alert capacity, fixed severity wording and selected the next eligible alert when a higher-ranked finding was already suppressed.
+- Expanded in-app help, security boundaries, architecture notes and the GitHub Pages feature overview. Endpoint Security remains deliberately excluded because it requires Apple Developer entitlements.
+
 ## 0.9.0 — 2026-08-23
 
 ### Local system integrity

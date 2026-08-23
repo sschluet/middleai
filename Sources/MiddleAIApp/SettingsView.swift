@@ -1374,7 +1374,7 @@ struct SettingsView: View {
         HelpStep(
           number: "2", title: "Vertrauenswürdige Baseline bestätigen",
           detail:
-            "Bestätige den aktuellen Zustand nur, wenn der Mac sauber und erwartungsgemäß konfiguriert ist. Spätere Abweichungen werden gegen diese lokale Baseline geprüft."
+            "Prüfe zuerst den Quellenstatus. Fehlt eine wichtige Quelle, blockiert MiddleAI die Bestätigung. Bestätige den geprüften Zustand nur, wenn der Mac sauber und erwartungsgemäß konfiguriert ist."
         )
         HelpStep(
           number: "3", title: "Warnungen testen",
@@ -1384,7 +1384,7 @@ struct SettingsView: View {
         HelpStep(
           number: "4", title: "Befunde bewerten",
           detail:
-            "Prüfe Details und mögliche legitime Ursachen, bevor du eine Abweichung in die Baseline übernimmst. Die optionale Erklärung verwendet ausschließlich die unter Intelligenz konfigurierte lokale KI."
+            "Filtere offene und behobene Befunde, klicke eine Zeile zum Öffnen ihrer Quelle und markiere nachvollziehbare Änderungen als geprüft. Ein lokaler Bericht lässt sich als Markdown exportieren. Die optionale Erklärung verwendet ausschließlich die unter Intelligenz konfigurierte lokale KI."
         )
         Label(
           "Der Systemwächter erkennt Zustandsänderungen und ausgewählte lokale Warnsignale. Ohne Developer-ID-pflichtige Endpoint-Security-Erweiterung ist er kein Echtzeit-EDR und kein Ersatz für Microsoft Defender oder ein SOC.",

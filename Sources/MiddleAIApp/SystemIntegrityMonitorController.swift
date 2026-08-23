@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import MiddleAICore
+import UniformTypeIdentifiers
 import UserNotifications
 
 #if canImport(FoundationModels)
@@ -20,6 +21,7 @@ import UserNotifications
   @Published private(set) var notificationStatus = "Benachrichtigungen noch nicht geprüft"
   @Published private(set) var historyStatus = "Noch keine Befundhistorie"
   @Published private(set) var pendingSnapshot: SystemIntegritySnapshot?
+  @Published private(set) var coverageReport: IntegrityCoverageReport?
 
   private let configProvider: @MainActor () -> AppConfig
   private let voiceHandler: @MainActor (String) -> Void
@@ -117,14 +119,14 @@ import UserNotifications
       let config = self.configProvider().securityMonitor
       let snapshot = await self.collector.capture(
         intervalMinutes: config.intervalMinutes, bundleURL: Bundle.main.bundleURL)
-      do {
-        try await self.store.saveBaseline(snapshot)
-        self.baselineAvailable = true
-        self.pendingSnapshot = nil
-        self.lastScan = snapshot.capturedAt
-        self.status = "Baseline bestätigt · \(snapshot.artifacts.count) Einträge geschützt"
-      } catch {
-        self.status = "Baseline konnte nicht gespeichert werden: \(error.localizedDescription)"
+      self.pendingSnapshot = snapshot
+      self.coverageReport = snapshot.coverageReport
+      self.lastScan = snapshot.capturedAt
+      if snapshot.coverageReport.isSuitableForBaseline {
+        self.status = "Ausgangszustand geprüft · bitte die Baseline jetzt ausdrücklich bestätigen"
+      } else {
+        self.status =
+          "Baseline blockiert · \(snapshot.coverageReport.criticalGaps.count) wichtige Quelle(n) fehlen"
       }
       self.scanRunning = false
     }
@@ -137,11 +139,16 @@ import UserNotifications
     }
     Task { [weak self] in
       guard let self else { return }
+      guard pendingSnapshot.coverageReport.isSuitableForBaseline else {
+        self.status = "Baseline nicht gespeichert · wichtige Prüfquellen sind nicht verfügbar"
+        return
+      }
       do {
         try await self.store.saveBaseline(pendingSnapshot)
         self.baselineAvailable = true
         self.pendingSnapshot = nil
-        self.status = "Aktueller Zustand wurde als neue Baseline bestätigt"
+        self.coverageReport = pendingSnapshot.coverageReport
+        self.status = "Geprüfter Zustand wurde als neue Baseline bestätigt"
       } catch {
         self.status = "Baseline konnte nicht ersetzt werden: \(error.localizedDescription)"
       }
@@ -177,12 +184,113 @@ import UserNotifications
     }
   }
 
+  func acknowledge(_ finding: IntegrityFinding) {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        self.findings = try await self.store.acknowledge(finding.id)
+        self.updateHistoryStatus(await self.store.status())
+        self.status = "Befund als geprüft markiert"
+      } catch {
+        self.status = "Befund konnte nicht aktualisiert werden: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func openSource(for finding: IntegrityFinding) {
+    guard let source = finding.source else {
+      status = "Für diesen Befund ist keine direkt öffnbare Quelle hinterlegt"
+      return
+    }
+    let workspace = NSWorkspace.shared
+    switch source.kind {
+    case .systemSettings, .profile:
+      guard source.locator.hasPrefix("x-apple.systempreferences:"),
+        let url = URL(string: source.locator)
+      else {
+        status = "Die hinterlegte Einstellungsquelle ist ungültig"
+        return
+      }
+      workspace.open(url)
+    case .application, .console, .keychain:
+      guard Self.safeLocalSourcePath(source.locator),
+        FileManager.default.fileExists(atPath: source.locator)
+      else {
+        status = "Die Quell-App ist auf diesem Mac nicht verfügbar"
+        return
+      }
+      workspace.openApplication(
+        at: URL(fileURLWithPath: source.locator), configuration: .init()
+      ) { _, error in
+        if let error { Task { @MainActor in self.status = error.localizedDescription } }
+      }
+    case .file:
+      guard Self.safeLocalSourcePath(source.locator) else {
+        status = "Die hinterlegte Dateiquelle ist ungültig"
+        return
+      }
+      let url = URL(fileURLWithPath: source.locator).standardizedFileURL
+      if FileManager.default.fileExists(atPath: url.path) {
+        workspace.activateFileViewerSelecting([url])
+      } else {
+        let parent = url.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: parent.path) else {
+          status = "Die Quelldatei ist nicht mehr vorhanden"
+          return
+        }
+        workspace.open(parent)
+      }
+    }
+    status = "Quelle geöffnet: \(source.title)"
+  }
+
+  func exportLocalReport() {
+    let panel = NSSavePanel()
+    panel.title = "Lokalen Systemwächter-Bericht sichern"
+    panel.nameFieldStringValue = "MiddleAI-Systemwaechter-\(Self.dayKey(Date())).md"
+    panel.allowedContentTypes = [.plainText]
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    let coverage = coverageReport
+    var lines = [
+      "# MiddleAI Systemwächter", "",
+      "Erstellt: \(Date().formatted(date: .long, time: .standard))", "",
+      "## Quellenstatus", "",
+      coverage.map { "\($0.checkedCount) von \($0.expectedCount) Quellen geprüft." }
+        ?? "Noch kein aktueller Quellenstatus.",
+    ]
+    if let coverage, !coverage.gaps.isEmpty {
+      lines += coverage.gaps.map {
+        "- \($0.title): nicht verfügbar\($0.critical ? " (für Baseline erforderlich)" : "")"
+      }
+    }
+    lines += ["", "## Befundverlauf", ""]
+    if findings.isEmpty {
+      lines.append("Keine gespeicherten Befunde.")
+    } else {
+      for finding in findings {
+        lines += [
+          "### [\(finding.lifecycleState.title)] \(finding.title)", "",
+          "- Zeitpunkt: \(finding.detectedAt.formatted(date: .abbreviated, time: .standard))",
+          "- Schweregrad: \(finding.severity.title)", "- Bereich: \(finding.category.title)",
+          "- Quelle: \(finding.source?.title ?? "Nicht direkt verfügbar")", "",
+          finding.detail, "",
+        ]
+      }
+    }
+    do {
+      try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+      status = "Lokaler Bericht wurde gespeichert"
+    } catch {
+      status = "Bericht konnte nicht gespeichert werden: \(error.localizedDescription)"
+    }
+  }
+
   func simulate(_ severity: IntegritySeverity) {
     let finding = rules.simulatedFinding(severity)
     findings = [finding] + findings.filter { !$0.simulated }
     latestLocalSummary = "Interne Simulation. Es wurde keine macOS-Einstellung verändert."
     status = "\(severity.title)-Test erfolgreich erzeugt"
-    Task { [weak self] in await self?.deliver(finding, force: true) }
+    Task { [weak self] in _ = await self?.deliver(finding, force: true) }
   }
 
   func testNotification() {
@@ -231,18 +339,37 @@ import UserNotifications
 
       if baseline == nil {
         pendingSnapshot = snapshot
+        coverageReport = snapshot.coverageReport
       } else {
         pendingSnapshot = result.findings.isEmpty ? nil : snapshot
-        try await store.append(
-          result.findings, retentionDays: config.securityMonitor.retentionDays)
-        findings = try await store.findings()
+        coverageReport = snapshot.coverageReport
+        let unavailableSources = Set(snapshot.unavailableSources)
+        let preservedSubjects = Set(
+          findings.compactMap { finding -> String? in
+            guard finding.isActive, let collectorID = finding.source?.collectorID,
+              unavailableSources.contains(collectorID)
+            else { return nil }
+            return finding.effectiveSubjectID
+          })
+        findings = try await store.reconcile(
+          result.findings, retentionDays: config.securityMonitor.retentionDays,
+          preserveSubjectIDs: preservedSubjects)
         updateHistoryStatus(await store.status())
       }
       baselineAvailable = baseline != nil
       lastScan = snapshot.capturedAt
       status = scanStatus(result: result, trigger: trigger)
-      if notify, baseline != nil, let important = result.findings.first {
-        await deliver(important)
+      let currentFindingIDs = Set(result.findings.map(\.id))
+      if notify, baseline != nil {
+        let candidates = findings.filter {
+          ($0.lifecycleState == .new || $0.lifecycleState == .escalated)
+            && currentFindingIDs.contains($0.id)
+        }.sorted {
+          $0.severity == $1.severity ? $0.detectedAt > $1.detectedAt : $0.severity > $1.severity
+        }
+        for candidate in candidates {
+          if await deliver(candidate) { break }
+        }
       }
     } catch {
       status = "Integritätsscan fehlgeschlagen: \(error.localizedDescription)"
@@ -288,47 +415,67 @@ import UserNotifications
     }
   }
 
-  private func deliver(_ finding: IntegrityFinding, force: Bool = false) async {
+  @discardableResult
+  private func deliver(_ finding: IntegrityFinding, force: Bool = false) async -> Bool {
     let config = configProvider().securityMonitor
+    var delivered = false
     let notificationEligible =
       force
       || (finding.severity >= Self.severity(config.notificationMinimumSeverity)
-        && allowedToNotify(finding, config: config))
+        && allowedToNotify(finding, config: config, channel: "notification"))
     if notificationEligible, await requestNotificationAuthorization() {
       await postNotification(
         title: "MiddleAI Systemwächter · \(finding.severity.title)",
         body: "\(finding.title). Details sind ausschließlich lokal in MiddleAI verfügbar.",
         identifier: "middleai-integrity-\(finding.id)")
-      if !force { recordNotification(finding) }
+      if !force { recordDelivery(finding, channel: "notification") }
+      delivered = true
     }
     guard config.voiceEnabled, sessionActive,
       finding.severity >= Self.severity(config.voiceMinimumSeverity),
-      force || !Self.isQuietHour(config)
-    else { return }
+      force
+        || (!Self.isQuietHour(config)
+          && allowedToNotify(finding, config: config, channel: "voice"))
+    else { return delivered }
+    if !force { recordDelivery(finding, channel: "voice") }
     voiceHandler(
-      "MiddleAI hat eine kritische Abweichung der Systemintegrität erkannt. Bitte öffne den Systemwächter für Details."
+      "MiddleAI hat einen \(finding.severity == .critical ? "kritischen" : "sicherheitsrelevanten") Befund erkannt. Bitte öffne den Systemwächter für Details."
     )
+    return true
   }
 
   private func allowedToNotify(
-    _ finding: IntegrityFinding, config: AppConfig.SecurityMonitor
+    _ finding: IntegrityFinding, config: AppConfig.SecurityMonitor, channel: String
   ) -> Bool {
+    guard finding.lifecycleState == .new || finding.lifecycleState == .escalated else {
+      return false
+    }
     let defaults = UserDefaults.standard
     let day = Self.dayKey(Date())
-    let countKey = "system-integrity.alert-count.\(day)"
-    guard defaults.integer(forKey: countKey) < config.maximumAlertsPerDay else { return false }
-    let lastKey = "system-integrity.last-alert.\(finding.id)"
+    let bucket = finding.severity == .critical ? "critical" : "standard"
+    let countKey = "system-integrity.\(channel)-\(bucket)-count.\(day)"
+    let limit = finding.severity == .critical ? 3 : config.maximumAlertsPerDay
+    guard defaults.integer(forKey: countKey) < limit else { return false }
+    if channel == "voice" {
+      let global = defaults.double(forKey: "system-integrity.voice-last-global")
+      if global > 0, Date().timeIntervalSince1970 - global < 1_800 { return false }
+    }
+    let lastKey = "system-integrity.\(channel)-last.\(finding.id)"
     let last = defaults.double(forKey: lastKey)
     return last == 0 || Date().timeIntervalSince1970 - last >= 86_400
   }
 
-  private func recordNotification(_ finding: IntegrityFinding) {
+  private func recordDelivery(_ finding: IntegrityFinding, channel: String) {
     let defaults = UserDefaults.standard
     let day = Self.dayKey(Date())
-    let countKey = "system-integrity.alert-count.\(day)"
-    let lastKey = "system-integrity.last-alert.\(finding.id)"
+    let bucket = finding.severity == .critical ? "critical" : "standard"
+    let countKey = "system-integrity.\(channel)-\(bucket)-count.\(day)"
+    let lastKey = "system-integrity.\(channel)-last.\(finding.id)"
     defaults.set(defaults.integer(forKey: countKey) + 1, forKey: countKey)
     defaults.set(Date().timeIntervalSince1970, forKey: lastKey)
+    if channel == "voice" {
+      defaults.set(Date().timeIntervalSince1970, forKey: "system-integrity.voice-last-global")
+    }
   }
 
   private func requestNotificationAuthorization() async -> Bool {
@@ -401,7 +548,8 @@ import UserNotifications
   private func updateHistoryStatus(_ value: IntegrityHistoryStatus) {
     switch value {
     case .empty: historyStatus = "Noch keine gespeicherten Befunde"
-    case .valid(let count): historyStatus = "Lokale Hash-Kette intakt · \(count) Befund(e)"
+    case .valid(let count):
+      historyStatus = "Lokal authentifizierte Verlaufskette intakt · \(count) Befund(e)"
     case .corrupted: historyStatus = "Warnung: Lokale Befundhistorie wurde verändert"
     }
   }
@@ -432,6 +580,17 @@ import UserNotifications
     return formatter.string(from: date)
   }
 
+  private static func safeLocalSourcePath(_ raw: String) -> Bool {
+    guard raw.hasPrefix("/"), !raw.contains("..") else { return false }
+    let path = URL(fileURLWithPath: raw).standardizedFileURL.path
+    let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+    return path == home || path.hasPrefix(home + "/") || path == "/Library"
+      || path.hasPrefix("/Library/") || path == "/Applications"
+      || path.hasPrefix("/Applications/") || path == "/System/Applications"
+      || path.hasPrefix("/System/Applications/") || path == "/etc"
+      || path.hasPrefix("/etc/")
+  }
+
   private static var watchedPaths: [URL] {
     let home = FileManager.default.homeDirectoryForCurrentUser
     return [
@@ -441,6 +600,9 @@ import UserNotifications
       URL(fileURLWithPath: "/Library/Managed Preferences"),
       home.appendingPathComponent("Library/LaunchAgents"),
       home.appendingPathComponent("Library/Managed Preferences"),
+      home.appendingPathComponent(".ssh"),
+      home.appendingPathComponent(".zshrc"),
+      home.appendingPathComponent(".zprofile"),
     ]
   }
 }

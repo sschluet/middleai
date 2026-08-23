@@ -23,6 +23,7 @@ struct SystemIntegrityCollector: Sendable {
     var artifacts: [IntegrityArtifact] = []
     var signals: [IntegritySignal] = []
     var unavailable: [String] = []
+    var checked: Set<String> = []
 
     func output(_ spec: CommandSpec, timeout: TimeInterval = 12) -> String? {
       let result = SafeCommandRunner.run(
@@ -31,6 +32,7 @@ struct SystemIntegrityCollector: Sendable {
         unavailable.append(spec.source)
         return nil
       }
+      checked.insert(spec.source)
       return result.output
     }
 
@@ -114,11 +116,13 @@ struct SystemIntegrityCollector: Sendable {
     if FileManager.default.fileExists(atPath: remoteManagementURL.path) {
       if let data = try? Data(contentsOf: remoteManagementURL, options: [.mappedIfSafe]) {
         states["security.remote_management"] = IntegrityHash.sha256(data)
+        checked.insert("security.remote_management")
       } else {
         unavailable.append("security.remote_management")
       }
     } else {
       states["security.remote_management"] = "not-configured"
+      checked.insert("security.remote_management")
     }
 
     if let text = output(
@@ -131,6 +135,8 @@ struct SystemIntegrityCollector: Sendable {
         pattern: #"(?im)^MDM server:\s*(\S+)\s*$"#, in: text)
       {
         states["mdm.server"] = IntegrityHash.sha256(server.lowercased())
+      } else {
+        states["mdm.server"] = "not-reported"
       }
     }
     if let text = output(
@@ -152,9 +158,16 @@ struct SystemIntegrityCollector: Sendable {
         executable: "/usr/bin/security",
         arguments: [
           "find-certificate", "-a", "-Z", "/Library/Keychains/System.keychain",
-        ], source: "certificates.system_roots"), timeout: 20)
+        ], source: "artifacts.systemCertificate"), timeout: 20)
     {
-      states["certificates.system_roots"] = IntegrityHash.sha256(Self.normalized(text))
+      artifacts += Self.systemCertificateArtifacts(from: text)
+    }
+    if let text = output(
+      CommandSpec(
+        executable: "/usr/bin/security", arguments: ["dump-trust-settings", "-d"],
+        source: "artifacts.rootCertificate"), timeout: 20)
+    {
+      artifacts += Self.trustedRootArtifacts(from: text)
     }
     if let text = output(
       CommandSpec(
@@ -180,11 +193,16 @@ struct SystemIntegrityCollector: Sendable {
       ),
     ]
     for (directory, kind, scope) in watchedDirectories {
-      guard FileManager.default.fileExists(atPath: directory.path) else { continue }
+      let sourceID = "artifacts.\(kind.rawValue)"
+      guard FileManager.default.fileExists(atPath: directory.path) else {
+        checked.insert(sourceID)
+        continue
+      }
       do {
         artifacts += try Self.fileArtifacts(in: directory, kind: kind, scope: scope)
+        checked.insert(sourceID)
       } catch {
-        unavailable.append("artifacts.\(kind.rawValue)")
+        unavailable.append(sourceID)
       }
     }
     let managedPreferenceDirectories = [
@@ -192,29 +210,77 @@ struct SystemIntegrityCollector: Sendable {
       home.appendingPathComponent("Library/Managed Preferences", isDirectory: true),
     ]
     for directory in managedPreferenceDirectories {
-      guard FileManager.default.fileExists(atPath: directory.path) else { continue }
+      let sourceID = "artifacts.\(IntegrityArtifact.Kind.managedPreference.rawValue)"
+      guard FileManager.default.fileExists(atPath: directory.path) else {
+        checked.insert(sourceID)
+        continue
+      }
       do {
         let scope = directory.path.hasPrefix(home.path) ? "user" : "system"
         artifacts += try Self.managedPreferenceArtifacts(in: directory, scope: scope)
+        checked.insert(sourceID)
       } catch {
-        unavailable.append("artifacts.\(IntegrityArtifact.Kind.managedPreference.rawValue)")
+        unavailable.append(sourceID)
       }
+    }
+
+    let loginResult = SafeCommandRunner.run(
+      executable: "/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 12,
+      maximumBytes: 1_200_000)
+    if loginResult.status == 0, !loginResult.timedOut {
+      artifacts += Self.loginItemArtifacts(from: loginResult.output)
+      checked.insert("artifacts.loginItem")
+    } else {
+      unavailable.append("artifacts.loginItem")
+    }
+
+    let cronResult = SafeCommandRunner.run(
+      executable: "/usr/bin/crontab", arguments: ["-l"], timeout: 5)
+    if !cronResult.timedOut, cronResult.status == 0 || cronResult.status == 1 {
+      artifacts += Self.cronArtifacts(from: cronResult.output, home: home)
+      checked.insert("artifacts.scheduledTask")
+    } else {
+      unavailable.append("artifacts.scheduledTask")
+    }
+    artifacts += Self.sensitiveUserFileArtifacts(
+      home: home, checked: &checked, unavailable: &unavailable)
+
+    let defender = Self.defenderHealth()
+    states.merge(defender.states) { _, new in new }
+    signals += defender.signals
+    if defender.available {
+      checked.insert("defender.health")
+    } else {
+      unavailable.append("defender.health")
     }
 
     if let executable = bundleURL?.appendingPathComponent("Contents/MacOS/MiddleAI"),
       let data = try? Data(contentsOf: executable, options: [.mappedIfSafe])
     {
       states["middleai.bundle"] = IntegrityHash.sha256(data)
+      checked.insert("middleai.bundle")
     } else {
       unavailable.append("middleai.bundle")
     }
 
-    signals += Self.securityLogSignals(intervalMinutes: intervalMinutes)
-    signals += Self.intuneAgentSignals(intervalMinutes: intervalMinutes)
+    let securityLogs = Self.securityLogSignals(intervalMinutes: intervalMinutes)
+    signals += securityLogs.signals
+    if securityLogs.available {
+      checked.insert("security.logs")
+    } else {
+      unavailable.append("security.logs")
+    }
+    let intuneLogs = Self.intuneAgentSignals(intervalMinutes: intervalMinutes)
+    signals += intuneLogs.signals
+    if intuneLogs.available {
+      checked.insert("intune.logs")
+    } else {
+      unavailable.append("intune.logs")
+    }
 
     return SystemIntegritySnapshot(
       states: states, artifacts: artifacts, signals: Self.coalesced(signals),
-      unavailableSources: Array(Set(unavailable)))
+      unavailableSources: Array(Set(unavailable)), checkedSources: Array(checked))
   }
 
   private static func fileArtifacts(
@@ -240,7 +306,10 @@ struct SystemIntegrityCollector: Sendable {
       let signature = executablePath.flatMap { Self.signatureInfo(URL(fileURLWithPath: $0)) }
       return IntegrityArtifact(
         kind: kind, identifier: identifier, digest: IntegrityHash.sha256(data),
-        teamIdentifier: signature?.teamID, signed: signature?.valid)
+        teamIdentifier: signature?.teamID, signed: signature?.valid,
+        source: IntegrityFindingSource(
+          kind: .file, title: url.lastPathComponent, locator: url.path,
+          collectorID: "artifacts.\(kind.rawValue)"))
     }
   }
 
@@ -283,7 +352,10 @@ struct SystemIntegrityCollector: Sendable {
       artifacts.append(
         IntegrityArtifact(
           kind: .managedPreference, identifier: "\(scope):\(relative)",
-          digest: IntegrityHash.sha256(data)))
+          digest: IntegrityHash.sha256(data),
+          source: IntegrityFindingSource(
+            kind: .file, title: url.lastPathComponent, locator: url.path,
+            collectorID: "artifacts.managedPreference")))
     }
     return artifacts
   }
@@ -303,7 +375,12 @@ struct SystemIntegrityCollector: Sendable {
       let block = source.substring(with: NSRange(location: start, length: max(0, end - start)))
       return IntegrityArtifact(
         kind: .configurationProfile, identifier: identifier,
-        digest: IntegrityHash.sha256(Self.normalized(block)))
+        digest: IntegrityHash.sha256(Self.normalized(block)),
+        source: IntegrityFindingSource(
+          kind: .profile, title: "Geräteverwaltung",
+          locator: "x-apple.systempreferences:com.apple.Profiles-Settings.extension",
+          detail: identifier, collectorID: "artifacts.configurationProfile"),
+        risk: Self.profileRisk(block))
     }
   }
 
@@ -320,11 +397,181 @@ struct SystemIntegrityCollector: Sendable {
       return IntegrityArtifact(
         kind: .systemExtension, identifier: bundleID,
         digest: IntegrityHash.sha256(Self.normalized(line)), teamIdentifier: teamID,
-        signed: true)
+        signed: true,
+        source: IntegrityFindingSource(
+          kind: .systemSettings, title: "Erweiterungen",
+          locator: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+          collectorID: "artifacts.systemExtension"))
     }
   }
 
-  private static func securityLogSignals(intervalMinutes: Int) -> [IntegritySignal] {
+  private static func profileRisk(_ block: String) -> IntegritySeverity {
+    let securityPayloads = [
+      "com.apple.security", "com.apple.applicationaccess", "com.apple.system-extension",
+      "com.apple.syspolicy", "com.apple.MCX.FileVault2", "com.apple.security.firewall",
+      "com.apple.vpn", "com.apple.networkextension", "com.apple.TCC.configuration-profile-policy",
+      "com.apple.loginwindow", "com.apple.mobiledevice.passwordpolicy", "certificate",
+    ]
+    return securityPayloads.contains {
+      block.localizedCaseInsensitiveContains($0)
+    } ? .critical : .warning
+  }
+
+  private static func systemCertificateArtifacts(from text: String) -> [IntegrityArtifact] {
+    let blocks = text.components(separatedBy: "SHA-256 hash:").dropFirst()
+    return blocks.prefix(1_000).compactMap { raw -> IntegrityArtifact? in
+      let block = String(raw)
+      guard
+        let fingerprint = block.components(separatedBy: .newlines).first?
+          .trimmingCharacters(in: .whitespacesAndNewlines), !fingerprint.isEmpty
+      else { return nil }
+      let label =
+        firstCapture(pattern: #"(?m)\"labl\"<blob>=\"([^\"]+)\""#, in: block)
+        ?? "Zertifikat \(fingerprint.prefix(12))"
+      return IntegrityArtifact(
+        kind: .systemCertificate, identifier: label, digest: fingerprint.lowercased(),
+        source: IntegrityFindingSource(
+          kind: .keychain, title: "Schlüsselbundverwaltung",
+          locator: "/System/Applications/Utilities/Keychain Access.app", detail: label,
+          collectorID: "artifacts.systemCertificate"))
+    }
+  }
+
+  private static func trustedRootArtifacts(from text: String) -> [IntegrityArtifact] {
+    captures(pattern: #"(?m)^\s*Cert\s+\d+:\s*(.+?)\s*$"#, in: text).prefix(500).map { name in
+      IntegrityArtifact(
+        kind: .rootCertificate, identifier: name,
+        digest: IntegrityHash.sha256(name.lowercased()),
+        source: IntegrityFindingSource(
+          kind: .keychain, title: "Vertrauensstellungen",
+          locator: "/System/Applications/Utilities/Keychain Access.app", detail: name,
+          collectorID: "artifacts.rootCertificate"),
+        risk: .critical)
+    }
+  }
+
+  private static func loginItemArtifacts(from text: String) -> [IntegrityArtifact] {
+    let records = captures(pattern: #"(?ms)(^\s*#\d+:.*?)(?=^\s*#\d+:|\z)"#, in: text)
+    return records.prefix(750).compactMap { block -> IntegrityArtifact? in
+      let identifier = firstCapture(pattern: #"(?m)^\s*Identifier:\s*(.+?)\s*$"#, in: block)
+      let name = firstCapture(pattern: #"(?m)^\s*Name:\s*(.+?)\s*$"#, in: block)
+      guard let stable = identifier ?? name, !stable.isEmpty else { return nil }
+      let team = firstCapture(pattern: #"(?m)^\s*Team Identifier:\s*(.+?)\s*$"#, in: block)
+      let disposition = firstCapture(pattern: #"(?m)^\s*Disposition:\s*(.+?)\s*$"#, in: block) ?? ""
+      let type = firstCapture(pattern: #"(?m)^\s*Type:\s*(.+?)\s*$"#, in: block) ?? ""
+      return IntegrityArtifact(
+        kind: .loginItem, identifier: stable,
+        digest: IntegrityHash.sha256(
+          normalized("\(stable)\n\(team ?? "")\n\(disposition)\n\(type)")),
+        teamIdentifier: team,
+        source: IntegrityFindingSource(
+          kind: .systemSettings, title: "Anmeldeobjekte & Erweiterungen",
+          locator: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+          detail: name, collectorID: "artifacts.loginItem"))
+    }
+  }
+
+  private static func cronArtifacts(from text: String, home: URL) -> [IntegrityArtifact] {
+    text.components(separatedBy: .newlines).enumerated().compactMap { index, raw in
+      let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !line.isEmpty, !line.hasPrefix("#") else { return nil }
+      return IntegrityArtifact(
+        kind: .scheduledTask, identifier: "Benutzer-Crontab Zeile \(index + 1)",
+        digest: IntegrityHash.sha256(line),
+        source: IntegrityFindingSource(
+          kind: .file, title: "Lokale Crontab", locator: home.path,
+          detail: "Mit ‘crontab -l’ im Terminal anzeigen",
+          collectorID: "artifacts.scheduledTask"))
+    }
+  }
+
+  private static func sensitiveUserFileArtifacts(
+    home: URL, checked: inout Set<String>, unavailable: inout [String]
+  ) -> [IntegrityArtifact] {
+    let specifications: [(String, IntegrityArtifact.Kind)] = [
+      (".ssh/authorized_keys", .authorizedKey), (".zshrc", .shellStartup),
+      (".zprofile", .shellStartup), (".bash_profile", .shellStartup),
+      (".profile", .shellStartup),
+    ]
+    var artifacts: [IntegrityArtifact] = []
+    for (relative, kind) in specifications {
+      let sourceID = "artifacts.\(kind.rawValue)"
+      let url = home.appendingPathComponent(relative)
+      guard FileManager.default.fileExists(atPath: url.path) else {
+        checked.insert(sourceID)
+        continue
+      }
+      guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else {
+        unavailable.append(sourceID)
+        continue
+      }
+      checked.insert(sourceID)
+      artifacts.append(
+        IntegrityArtifact(
+          kind: kind, identifier: relative, digest: IntegrityHash.sha256(data),
+          source: IntegrityFindingSource(
+            kind: .file, title: url.lastPathComponent, locator: url.path,
+            collectorID: sourceID),
+          risk: kind == .authorizedKey ? .critical : .warning))
+    }
+    return artifacts
+  }
+
+  private static func defenderHealth() -> (
+    states: [String: String], signals: [IntegritySignal], available: Bool
+  ) {
+    let executable =
+      "/Applications/Microsoft Defender.app/Contents/Resources/Tools/wdavdaemonclient"
+    guard FileManager.default.isExecutableFile(atPath: executable) else {
+      return (["defender.installed": "false"], [], true)
+    }
+    let result = SafeCommandRunner.run(
+      executable: executable, arguments: ["health", "--output", "json"], timeout: 12,
+      maximumBytes: 500_000)
+    guard result.status == 0, !result.timedOut,
+      let data = result.output.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return ([:], [], false) }
+    func value(_ key: String) -> String {
+      guard let raw = object[key] else { return "unknown" }
+      if let bool = raw as? Bool { return bool ? "enabled" : "disabled" }
+      return String(describing: raw).lowercased()
+    }
+    var states = [
+      "defender.installed": "true", "defender.healthy": value("healthy"),
+      "defender.licensed": value("licensed"),
+      "defender.real_time_protection": value("realTimeProtectionEnabled"),
+      "defender.network_protection": value("networkProtectionStatus"),
+      "defender.definitions": value("definitionsStatus"),
+      "defender.full_disk_access": value("fullDiskAccessEnabled"),
+      "defender.tamper_protection": value("tamperProtection"),
+      "defender.passive_mode": value("passiveModeEnabled"),
+    ]
+    states = states.mapValues { String($0.prefix(120)) }
+    let source = IntegrityFindingSource(
+      kind: .application, title: "Microsoft Defender",
+      locator: "/Applications/Microsoft Defender.app", collectorID: "defender.health")
+    var signals: [IntegritySignal] = []
+    if states["defender.healthy"] == "disabled" {
+      signals.append(
+        IntegritySignal(
+          category: .securityConfiguration, identifier: "defender-unhealthy",
+          summary: "Microsoft Defender meldet einen nicht gesunden Zustand", severity: .warning,
+          source: source))
+    }
+    if states["defender.real_time_protection"] == "disabled" {
+      signals.append(
+        IntegritySignal(
+          category: .securityConfiguration, identifier: "defender-real-time-disabled",
+          summary: "Microsoft Defender Echtzeitschutz ist deaktiviert", severity: .critical,
+          source: source))
+    }
+    return (states, signals, true)
+  }
+
+  private static func securityLogSignals(intervalMinutes: Int) -> (
+    signals: [IntegritySignal], available: Bool
+  ) {
     let minutes = min(1_440, max(10, intervalMinutes))
     let predicate = """
       ((messageType == error OR messageType == fault) AND
@@ -343,7 +590,7 @@ struct SystemIntegrityCollector: Sendable {
       arguments: [
         "show", "--last", "\(minutes)m", "--style", "ndjson", "--predicate", predicate,
       ], timeout: 20, maximumBytes: 1_500_000)
-    guard result.status == 0, !result.timedOut else { return [] }
+    guard result.status == 0, !result.timedOut else { return ([], false) }
     var signals: [IntegritySignal] = []
     var authenticationFailures = 0
     for line in result.output.components(separatedBy: .newlines).prefix(600) {
@@ -365,7 +612,10 @@ struct SystemIntegrityCollector: Sendable {
         IntegritySignal(
           category: category,
           identifier: "unified-log|\(process)|\(IntegrityHash.sha256(normalized).prefix(16))",
-          summary: "Sicherheitsrelevanter Fehler in \(process)", severity: severity))
+          summary: "Sicherheitsrelevanter Fehler in \(process)", severity: severity,
+          source: IntegrityFindingSource(
+            kind: .console, title: "Konsole", locator: "/System/Applications/Utilities/Console.app",
+            detail: process, collectorID: "security.logs")))
     }
     if authenticationFailures >= 5 {
       signals.append(
@@ -373,12 +623,17 @@ struct SystemIntegrityCollector: Sendable {
           category: .identity, identifier: "repeated-authentication-failures",
           summary: "Wiederholte fehlgeschlagene Anmeldungen",
           severity: authenticationFailures >= 20 ? .critical : .warning,
-          count: authenticationFailures))
+          count: authenticationFailures,
+          source: IntegrityFindingSource(
+            kind: .console, title: "Konsole", locator: "/System/Applications/Utilities/Console.app",
+            detail: "Anmeldeereignisse", collectorID: "security.logs")))
     }
-    return signals
+    return (signals, true)
   }
 
-  private static func intuneAgentSignals(intervalMinutes: Int) -> [IntegritySignal] {
+  private static func intuneAgentSignals(intervalMinutes: Int) -> (
+    signals: [IntegritySignal], available: Bool
+  ) {
     let directories = [
       URL(fileURLWithPath: "/Library/Logs/Microsoft/Intune", isDirectory: true),
       FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -412,12 +667,17 @@ struct SystemIntegrityCollector: Sendable {
           }.count
       }
     }
-    guard count >= 5 else { return [] }
-    return [
-      IntegritySignal(
-        category: .deviceManagement, identifier: "intune-agent-repeated-errors",
-        summary: "Intune-Agent meldet wiederholte Fehler", severity: .warning, count: count)
-    ]
+    guard count >= 5 else { return ([], true) }
+    return (
+      [
+        IntegritySignal(
+          category: .deviceManagement, identifier: "intune-agent-repeated-errors",
+          summary: "Intune-Agent meldet wiederholte Fehler", severity: .warning, count: count,
+          source: IntegrityFindingSource(
+            kind: .file, title: "Intune-Logs", locator: "/Library/Logs/Microsoft/Intune",
+            collectorID: "intune.logs"))
+      ], true
+    )
   }
 
   private static func coalesced(_ signals: [IntegritySignal]) -> [IntegritySignal] {

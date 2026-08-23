@@ -7,6 +7,7 @@ struct SystemIntegritySettingsPane: View {
   @State private var confirmsBaselineReplacement = false
   @State private var confirmsBaselineRemoval = false
   @State private var confirmsHistoryDeletion = false
+  @State private var findingFilter = "active"
 
   var body: some View {
     VStack(spacing: 16) {
@@ -93,20 +94,35 @@ struct SystemIntegritySettingsPane: View {
         "Erstelle die Baseline nur, wenn der Mac gerade in einem bekannten und vertrauenswürdigen Zustand ist. MiddleAI speichert ausschließlich normalisierte Zustände, Fingerabdrücke und technische Kennungen lokal unter ~/.middleai/system-integrity."
       )
       .font(.caption).foregroundStyle(.secondary)
-      if monitor.pendingSnapshot != nil {
+      if let snapshot = monitor.pendingSnapshot {
         Label(
-          "Ein aktueller Zustand liegt zur Prüfung bereit. Übernimm ihn erst, nachdem alle Befunde plausibel erklärt sind.",
-          systemImage: "exclamationmark.shield"
+          snapshot.coverageReport.isSuitableForBaseline
+            ? "Die Prüfung ist vollständig. Bestätige den Zustand erst, wenn er vertrauenswürdig ist."
+            : "Die Baseline kann nicht bestätigt werden, solange wichtige Quellen fehlen.",
+          systemImage: snapshot.coverageReport.isSuitableForBaseline
+            ? "checkmark.shield" : "exclamationmark.shield"
         )
-        .font(.caption).foregroundStyle(.orange)
+        .font(.caption).foregroundStyle(
+          snapshot.coverageReport.isSuitableForBaseline ? .green : .orange)
+        coverageView(snapshot.coverageReport)
+      } else if let coverage = monitor.coverageReport {
+        coverageView(coverage)
       }
       HStack {
+        if let snapshot = monitor.pendingSnapshot, snapshot.coverageReport.isSuitableForBaseline {
+          Button(
+            monitor.baselineAvailable
+              ? "Geprüfte Baseline übernehmen" : "Geprüfte Baseline bestätigen"
+          ) {
+            confirmsBaselineReplacement = true
+          }
+          .buttonStyle(.borderedProminent)
+        }
         if monitor.baselineAvailable {
-          Button("Aktuellen Zustand übernehmen") { confirmsBaselineReplacement = true }
+          Button("Neuen Zustand prüfen") { monitor.captureBaseline() }
           Button("Baseline entfernen", role: .destructive) { confirmsBaselineRemoval = true }
         } else {
-          Button("Aktuellen Zustand bestätigen") { monitor.captureBaseline() }
-            .buttonStyle(.borderedProminent)
+          Button("Ausgangszustand prüfen") { monitor.captureBaseline() }
         }
         Spacer()
       }
@@ -131,7 +147,7 @@ struct SystemIntegritySettingsPane: View {
         "Regelmäßig alle \(state.config.securityMonitor.intervalMinutes) Minuten prüfen",
         value: $state.config.securityMonitor.intervalMinutes, in: 10...1_440, step: 5)
       Text(
-        "Zusätzlich reagiert MiddleAI zeitnah auf Änderungen in LaunchAgent-, LaunchDaemon-, Hilfsprozess- und verwalteten Einstellungsordnern. macOS darf Hintergrundprüfungen zur Schonung von Akku und Leistung verschieben."
+        "Zusätzlich reagiert MiddleAI zeitnah auf Änderungen an Autostart-, SSH-, Shell- und verwalteten Einstellungsdateien. Die regelmäßige Prüfung umfasst außerdem Anmeldeobjekte, Crontab, Zertifikate, Profile, Microsoft Defender und ausgewählte lokale Sicherheitslogs. macOS darf Hintergrundprüfungen zur Schonung von Akku und Leistung verschieben."
       )
       .font(.caption).foregroundStyle(.secondary)
     }
@@ -240,12 +256,22 @@ struct SystemIntegritySettingsPane: View {
         )
         .frame(minHeight: 120)
       } else {
-        ForEach(monitor.findings.prefix(30)) { finding in
-          findingRow(finding)
-          if finding.id != monitor.findings.prefix(30).last?.id { Divider() }
+        Picker("Ansicht", selection: $findingFilter) {
+          Text("Offen").tag("active")
+          Text("Behoben").tag("resolved")
+          Text("Alle").tag("all")
         }
-        Button("Befundhistorie löschen", role: .destructive) {
-          confirmsHistoryDeletion = true
+        .pickerStyle(.segmented)
+        ForEach(visibleFindings.prefix(50)) { finding in
+          findingRow(finding)
+          if finding.id != visibleFindings.prefix(50).last?.id { Divider() }
+        }
+        HStack {
+          Button("Lokalen Bericht exportieren") { monitor.exportLocalReport() }
+          Spacer()
+          Button("Befundhistorie löschen", role: .destructive) {
+            confirmsHistoryDeletion = true
+          }
         }
       }
     }
@@ -258,14 +284,14 @@ struct SystemIntegritySettingsPane: View {
       symbol: "info.circle"
     ) {
       Text(
-        "MiddleAI überwacht Konfigurationsprofile, verwaltete Einstellungen, MDM-Zustand, zentrale macOS-Schutzfunktionen, Benutzer und Administratoren, Zertifikate, DNS und Proxy, Systemerweiterungen, persistente Autostarteinträge, MiddleAI selbst sowie ausgewählte lokale Sicherheits- und Intune-Fehler."
+        "MiddleAI überwacht Konfigurationsprofile einschließlich sicherheitsrelevanter Payloads, verwaltete Einstellungen, MDM-Zustand, zentrale macOS-Schutzfunktionen, Benutzer und Administratoren, einzelne Zertifikate und Vertrauensstellungen, DNS und Proxy, Systemerweiterungen, Anmeldeobjekte, Crontab, SSH-Schlüssel, Shell-Startdateien, persistente Autostarteinträge, MiddleAI selbst, Microsoft Defender sowie ausgewählte lokale Sicherheits- und Intune-Fehler."
       )
       Text(
         "Ohne Apple Developer Account verwendet MiddleAI keine Endpoint-Security-Systemerweiterung. Es sieht daher nicht jeden Prozess- oder Dateizugriff in Echtzeit und ersetzt weder Microsoft Defender noch ein professionelles EDR/SOC. Eine Meldung ist ein Prüfhinweis, kein Beweis für einen Angriff."
       )
       .foregroundStyle(.secondary)
       Text(
-        "Wichtig: Ein Angreifer mit vollständigen Administratorrechten könnte auch lokale Baseline- oder Verlaufsdateien beeinflussen. MiddleAI prüft die Verlaufskette auf Manipulation, kann sie ohne extern geschützten Schlüssel aber nicht kryptografisch gegen einen vollständig kompromittierten Mac absichern."
+        "Baseline und Verlauf werden mit einem nur auf diesem Mac nutzbaren Schlüssel aus dem macOS-Schlüsselbund authentifiziert. Das erkennt nachträgliche Dateiänderungen deutlich zuverlässiger. Ein Angreifer mit vollständiger Kontrolle über den laufenden Benutzer, dessen Schlüsselbund und MiddleAI selbst bleibt dennoch außerhalb des belastbaren Schutzmodells."
       )
       .font(.caption).foregroundStyle(.secondary)
     }
@@ -286,14 +312,21 @@ struct SystemIntegritySettingsPane: View {
       VStack(alignment: .leading, spacing: 5) {
         HStack {
           Text(finding.title).font(.callout.weight(.semibold))
+          Text(finding.lifecycleState.title).font(.caption2.weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(lifecycleColor(finding.lifecycleState).opacity(0.12), in: Capsule())
+            .foregroundStyle(lifecycleColor(finding.lifecycleState))
           if finding.simulated {
             Text("Simulation").font(.caption2.weight(.medium))
               .padding(.horizontal, 6).padding(.vertical, 2)
               .background(Color.blue.opacity(0.10), in: Capsule())
           }
           Spacer()
-          Text(finding.detectedAt.formatted(date: .abbreviated, time: .shortened))
-            .font(.caption2).foregroundStyle(.secondary)
+          Text(
+            (finding.resolvedAt ?? finding.detectedAt).formatted(
+              date: .abbreviated, time: .shortened)
+          )
+          .font(.caption2).foregroundStyle(.secondary)
         }
         Text(finding.category.title).font(.caption).foregroundStyle(.secondary)
         Text(finding.detail).font(.caption)
@@ -304,7 +337,61 @@ struct SystemIntegritySettingsPane: View {
           Text("\(finding.occurrenceCount) Mal erkannt")
             .font(.caption2).foregroundStyle(.secondary)
         }
+        if let resolved = finding.resolvedAt {
+          Text("Behoben: \(resolved.formatted(date: .abbreviated, time: .shortened))")
+            .font(.caption2).foregroundStyle(.green)
+        }
+        HStack(spacing: 10) {
+          if let source = finding.source {
+            Button("Quelle öffnen") { monitor.openSource(for: finding) }
+              .buttonStyle(.link)
+            Text(source.title).font(.caption2).foregroundStyle(.secondary)
+          }
+          if finding.isActive, finding.lifecycleState != .acknowledged, !finding.simulated {
+            Button("Als geprüft markieren") { monitor.acknowledge(finding) }
+              .buttonStyle(.link)
+          }
+        }
       }
+    }
+    .contentShape(Rectangle())
+    .onTapGesture {
+      if finding.source != nil { monitor.openSource(for: finding) }
+    }
+  }
+
+  private var visibleFindings: [IntegrityFinding] {
+    switch findingFilter {
+    case "active": return monitor.findings.filter(\.isActive)
+    case "resolved": return monitor.findings.filter { !$0.isActive }
+    default: return monitor.findings
+    }
+  }
+
+  @ViewBuilder private func coverageView(_ report: IntegrityCoverageReport) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      Text("Quellenstatus: \(report.checkedCount) von \(report.expectedCount) geprüft")
+        .font(.caption.weight(.semibold))
+      ForEach(report.gaps) { gap in
+        Label(
+          "\(gap.title) nicht verfügbar\(gap.critical ? " · für Baseline erforderlich" : "")",
+          systemImage: gap.critical ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.caption2).foregroundStyle(gap.critical ? .red : .orange)
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+  }
+
+  private func lifecycleColor(_ state: IntegrityFindingState) -> Color {
+    switch state {
+    case .new: return .blue
+    case .ongoing: return .orange
+    case .escalated: return .red
+    case .acknowledged: return .green
+    case .resolved: return .secondary
     }
   }
 
