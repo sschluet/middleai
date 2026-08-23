@@ -15,7 +15,7 @@ By default, double-tap the left Option key to start dictation and tap it once to
 
 ## Download
 
-Ready-to-run Apple Silicon builds are available under [GitHub Releases](https://github.com/sschluet/middleai/releases). Download `MiddleAI-<version>-macOS-arm64.zip`, unpack it and move `MiddleAI.app` to `/Applications`.
+Ready-to-run Apple Silicon builds are available under [GitHub Releases](https://github.com/sschluet/middleai/releases). Download `MiddleAI-v<version>-macOS-arm64.zip`, unpack it and move `MiddleAI.app` to `/Applications`.
 
 The current development releases are ad-hoc signed but not yet Developer-ID signed or notarized. On first launch, macOS can therefore require right-clicking `MiddleAI.app` and choosing **Open**. Microphone and Accessibility permissions, provider credentials and local speech models must be configured separately on every Mac.
 
