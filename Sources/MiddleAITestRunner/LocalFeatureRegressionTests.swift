@@ -207,6 +207,17 @@ enum LocalFeatureRegressionTests {
       migratedDocument?["version"] as? Int == 2
         && migratedDocument?["authenticationCode"] as? String != nil,
       "legacy baseline HMAC migration")
+    var legacyBaseline = SystemIntegritySnapshot()
+    legacyBaseline.version = 1
+    let expandedCurrent = SystemIntegritySnapshot(
+      artifacts: [
+        IntegrityArtifact(kind: .loginItem, identifier: "new-source", digest: "one"),
+        IntegrityArtifact(kind: .launchAgent, identifier: "legacy-source", digest: "two"),
+      ])
+    let compatibleCurrent = expandedCurrent.comparisonSnapshot(for: legacyBaseline)
+    try expect(
+      compatibleCurrent.artifacts.map(\.kind) == [.launchAgent],
+      "legacy baseline suppresses only newly introduced collectors")
   }
 
   static func testVoiceAndMeetingFeatures() async throws {

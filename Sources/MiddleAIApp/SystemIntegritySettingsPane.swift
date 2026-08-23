@@ -86,14 +86,25 @@ struct SystemIntegritySettingsPane: View {
       symbol: "checkmark.seal"
     ) {
       Label(
-        monitor.baselineAvailable ? "Baseline vorhanden" : "Noch keine Baseline bestätigt",
-        systemImage: monitor.baselineAvailable ? "checkmark.circle.fill" : "exclamationmark.circle"
+        monitor.baselineRequiresUpgrade
+          ? "Baseline-Erweiterung erforderlich"
+          : monitor.baselineAvailable ? "Baseline vorhanden" : "Noch keine Baseline bestätigt",
+        systemImage: monitor.baselineRequiresUpgrade
+          ? "arrow.triangle.2.circlepath.circle"
+          : monitor.baselineAvailable ? "checkmark.circle.fill" : "exclamationmark.circle"
       )
-      .foregroundStyle(monitor.baselineAvailable ? .green : .orange)
+      .foregroundStyle(
+        monitor.baselineRequiresUpgrade ? .orange : monitor.baselineAvailable ? .green : .orange)
       Text(
         "Erstelle die Baseline nur, wenn der Mac gerade in einem bekannten und vertrauenswürdigen Zustand ist. MiddleAI speichert ausschließlich normalisierte Zustände, Fingerabdrücke und technische Kennungen lokal unter ~/.middleai/system-integrity."
       )
       .font(.caption).foregroundStyle(.secondary)
+      if monitor.baselineRequiresUpgrade {
+        Text(
+          "Die bisher überwachten Bereiche bleiben aktiv. Neue Quellen dieser Version werden erst nach der geprüften Baseline-Erweiterung bewertet, damit das Update keine künstlichen Neufunde erzeugt."
+        )
+        .font(.caption).foregroundStyle(.orange)
+      }
       if let snapshot = monitor.pendingSnapshot {
         Label(
           snapshot.coverageReport.isSuitableForBaseline

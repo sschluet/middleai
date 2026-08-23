@@ -15,6 +15,7 @@ import UserNotifications
   @Published private(set) var findings: [IntegrityFinding] = []
   @Published private(set) var scanRunning = false
   @Published private(set) var baselineAvailable = false
+  @Published private(set) var baselineRequiresUpgrade = false
   @Published private(set) var status = "Systemwächter ist ausgeschaltet"
   @Published private(set) var lastScan: Date?
   @Published private(set) var latestLocalSummary = ""
@@ -56,7 +57,12 @@ import UserNotifications
     Task { [weak self] in
       guard let self else { return }
       do {
-        self.baselineAvailable = try await self.store.baseline() != nil
+        let baseline = try await self.store.baseline()
+        self.baselineAvailable = baseline != nil
+        self.baselineRequiresUpgrade =
+          baseline.map {
+            $0.version < SystemIntegritySnapshot.currentVersion
+          } ?? false
         self.findings = try await self.store.findings()
         self.updateHistoryStatus(await self.store.status())
       } catch {
@@ -100,9 +106,11 @@ import UserNotifications
     }
     pathWatcher?.start()
     status =
-      baselineAvailable
-      ? "Aktiv · nächste Prüfung ungefähr alle \(config.intervalMinutes) Minuten"
-      : "Aktiv · bitte zuerst den aktuellen Zustand als Baseline bestätigen"
+      baselineRequiresUpgrade
+      ? "Aktiv · neue Prüfquellen müssen einmal als Baseline bestätigt werden"
+      : baselineAvailable
+        ? "Aktiv · nächste Prüfung ungefähr alle \(config.intervalMinutes) Minuten"
+        : "Aktiv · bitte zuerst den aktuellen Zustand als Baseline bestätigen"
     Task { [weak self] in
       try? await Task.sleep(for: .seconds(2))
       await self?.runScan(trigger: .startup, notify: false)
@@ -146,6 +154,7 @@ import UserNotifications
       do {
         try await self.store.saveBaseline(pendingSnapshot)
         self.baselineAvailable = true
+        self.baselineRequiresUpgrade = false
         self.pendingSnapshot = nil
         self.coverageReport = pendingSnapshot.coverageReport
         self.status = "Geprüfter Zustand wurde als neue Baseline bestätigt"
@@ -161,6 +170,7 @@ import UserNotifications
       do {
         try await self.store.removeBaseline()
         self.baselineAvailable = false
+        self.baselineRequiresUpgrade = false
         self.pendingSnapshot = nil
         self.status = "Baseline entfernt · Änderungen werden bis zur Bestätigung nicht bewertet"
       } catch {
@@ -325,7 +335,17 @@ import UserNotifications
       intervalMinutes: config.securityMonitor.intervalMinutes, bundleURL: Bundle.main.bundleURL)
     do {
       let baseline = try await store.baseline()
-      var result = rules.evaluate(baseline: baseline, current: snapshot)
+      baselineRequiresUpgrade =
+        baseline.map {
+          $0.version < SystemIntegritySnapshot.currentVersion
+        } ?? false
+      let comparisonSnapshot: SystemIntegritySnapshot
+      if let baseline, baselineRequiresUpgrade {
+        comparisonSnapshot = snapshot.comparisonSnapshot(for: baseline)
+      } else {
+        comparisonSnapshot = snapshot
+      }
+      var result = rules.evaluate(baseline: baseline, current: comparisonSnapshot)
       let categories = Set(config.securityMonitor.categories)
       result.findings.removeAll { !categories.contains($0.category.rawValue) }
       if let summary = await localExplanation(for: result.findings, config: config) {
@@ -341,7 +361,7 @@ import UserNotifications
         pendingSnapshot = snapshot
         coverageReport = snapshot.coverageReport
       } else {
-        pendingSnapshot = result.findings.isEmpty ? nil : snapshot
+        pendingSnapshot = baselineRequiresUpgrade || !result.findings.isEmpty ? snapshot : nil
         coverageReport = snapshot.coverageReport
         let unavailableSources = Set(snapshot.unavailableSources)
         let preservedSubjects = Set(
@@ -535,6 +555,9 @@ import UserNotifications
     if !result.baselineAvailable {
       return
         "Scan abgeschlossen · bitte aktuellen Zustand als vertrauenswürdige Baseline bestätigen"
+    }
+    if baselineRequiresUpgrade {
+      return "Bestehende Bereiche geprüft · neue Prüfquellen warten auf Baseline-Bestätigung"
     }
     if result.findings.isEmpty {
       return

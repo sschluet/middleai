@@ -211,6 +211,20 @@ public struct IntegrityCoverageReport: Equatable, Sendable {
 }
 
 extension SystemIntegritySnapshot {
+  /// Keeps the previously supported sources monitored while a user reviews newly introduced
+  /// collectors. This avoids treating an application update itself as dozens of new artifacts.
+  public func comparisonSnapshot(for baseline: SystemIntegritySnapshot) -> SystemIntegritySnapshot {
+    guard baseline.version < Self.currentVersion else { return self }
+    let legacyKinds: Set<IntegrityArtifact.Kind> = [
+      .configurationProfile, .managedPreference, .systemExtension, .launchAgent, .launchDaemon,
+      .privilegedHelper,
+    ]
+    return SystemIntegritySnapshot(
+      capturedAt: capturedAt, states: states,
+      artifacts: artifacts.filter { legacyKinds.contains($0.kind) }, signals: signals,
+      unavailableSources: unavailableSources, checkedSources: checkedSources ?? [])
+  }
+
   public var coverageReport: IntegrityCoverageReport {
     let checked = Set(checkedSources ?? [])
     let unavailable = Set(unavailableSources)

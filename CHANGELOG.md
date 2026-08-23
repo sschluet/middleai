@@ -2,6 +2,12 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.10.1 — 2026-08-23
+
+- Kept all previously monitored 0.9 baseline areas active while new 0.10 collectors wait for explicit baseline confirmation.
+- Prevented newly introduced certificate, login-item and persistence inventories from appearing as artificial findings immediately after an update.
+- Added an in-app migration explanation and regression coverage for the compatibility boundary.
+
 ## 0.10.0 — 2026-08-23
 
 ### Verifiable local system monitoring

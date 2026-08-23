@@ -117,6 +117,8 @@ Optional natural-language explanations use only the local intelligence source se
 
 Create the baseline only while the Mac is in a known, trusted state. First run the source check, inspect any coverage gaps, and only then explicitly confirm the pending snapshot. Review findings before replacing it. Built-in information, warning and critical simulations let you test the interface, notifications and voice output without changing the system.
 
+When upgrading from the 0.9 baseline schema, MiddleAI continues evaluating every previously supported source but temporarily excludes collectors introduced in 0.10 from comparison. The settings page explains this state and offers the complete current snapshot for review. New collectors become active only after that expanded baseline is explicitly confirmed, so an application update does not manufacture a large set of new findings.
+
 This implementation deliberately requires no Apple Developer account. It does not install an Endpoint Security system extension and therefore cannot observe every process or file access in real time. It is an integrity and anomaly assistant, not an antivirus, EDR or proof that an attack occurred. Keychain-backed authentication protects local files against undetected offline editing, but a fully compromised administrator who controls the running user, Keychain and application remains outside the protection model; the feature is not external attestation.
 
 ### Local knowledge and personal memory
