@@ -13,6 +13,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
   case intelligence
   case knowledge
   case workflows
+  case securityMonitor
   case diagnostics
   case help
 
@@ -28,6 +29,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .intelligence: return "Intelligenz"
     case .knowledge: return "Lokales Wissen"
     case .workflows: return "Arbeitsabläufe"
+    case .securityMonitor: return "Systemwächter"
     case .diagnostics: return "Diagnose"
     case .help: return "Hilfe"
     }
@@ -43,6 +45,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .intelligence: return "Routing und lokale Modelle"
     case .knowledge: return "Quellen und persönliche Hinweise"
     case .workflows: return "Auswahl, Aktionen und Besprechungen"
+    case .securityMonitor: return "Integrität, Intune und Warnungen"
     case .diagnostics: return "Berechtigungen und Systemstatus"
     case .help: return "Installation und Anforderungen"
     }
@@ -58,6 +61,7 @@ enum MiddleAISettingsPane: String, CaseIterable, Identifiable {
     case .intelligence: return "brain.head.profile"
     case .knowledge: return "books.vertical"
     case .workflows: return "wand.and.rays"
+    case .securityMonitor: return "shield.lefthalf.filled"
     case .diagnostics: return "stethoscope"
     case .help: return "questionmark.circle"
     }
@@ -145,6 +149,8 @@ struct SettingsView: View {
           case .intelligence: intelligencePane
           case .knowledge: LocalKnowledgeSettingsPane(state: state)
           case .workflows: workflowsPane
+          case .securityMonitor:
+            SystemIntegritySettingsPane(state: state, monitor: state.integrityMonitor)
           case .diagnostics: DiagnosticsPane(state: state)
           case .help: helpPane
           }
@@ -1351,6 +1357,38 @@ struct SettingsView: View {
         Label(
           "Lokales Wissen und Memory werden ausschließlich an einen lokalen Antwortendpunkt übergeben. Entfernte OpenWebUI-, OpenAI- und OpenRouter-Verbindungen erhalten diese Inhalte nicht.",
           systemImage: "checkmark.shield.fill"
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+
+      SettingsCard(
+        title: "Systemwächter einrichten",
+        subtitle: "Lokale Integritätsprüfung ohne Cloud-Analyse oder Systemerweiterung",
+        symbol: "shield.lefthalf.filled"
+      ) {
+        HelpStep(
+          number: "1", title: "Systemwächter aktivieren",
+          detail:
+            "Wähle die gewünschten Prüfkategorien und ein Intervall von mindestens zehn Minuten. MiddleAI reagiert zusätzlich auf Änderungen in wichtigen Autostart- und Verwaltungsordnern."
+        )
+        HelpStep(
+          number: "2", title: "Vertrauenswürdige Baseline bestätigen",
+          detail:
+            "Bestätige den aktuellen Zustand nur, wenn der Mac sauber und erwartungsgemäß konfiguriert ist. Spätere Abweichungen werden gegen diese lokale Baseline geprüft."
+        )
+        HelpStep(
+          number: "3", title: "Warnungen testen",
+          detail:
+            "Nutze die eingebauten Simulationen für Hinweis, Warnung und Kritisch. Dabei wird keine Systemeinstellung verändert und kein Angriff erzeugt."
+        )
+        HelpStep(
+          number: "4", title: "Befunde bewerten",
+          detail:
+            "Prüfe Details und mögliche legitime Ursachen, bevor du eine Abweichung in die Baseline übernimmst. Die optionale Erklärung verwendet ausschließlich die unter Intelligenz konfigurierte lokale KI."
+        )
+        Label(
+          "Der Systemwächter erkennt Zustandsänderungen und ausgewählte lokale Warnsignale. Ohne Developer-ID-pflichtige Endpoint-Security-Erweiterung ist er kein Echtzeit-EDR und kein Ersatz für Microsoft Defender oder ein SOC.",
+          systemImage: "info.circle"
         )
         .font(.caption).foregroundStyle(.secondary)
       }

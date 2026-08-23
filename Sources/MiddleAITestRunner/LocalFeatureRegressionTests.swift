@@ -93,6 +93,68 @@ enum LocalFeatureRegressionTests {
     } catch {}
   }
 
+  static func testSystemIntegrityMonitor() async throws {
+    var config = AppConfig()
+    config.securityMonitor.enabled = true
+    config.securityMonitor.intervalMinutes = 45
+    config.securityMonitor.localAIEnabled = true
+    config.securityMonitor.voiceMinimumSeverity = "critical"
+    config.securityMonitor.categories = [
+      IntegrityCategory.deviceManagement.rawValue,
+      IntegrityCategory.securityConfiguration.rawValue,
+    ]
+    let restored = try ConfigLoader.parseYAML(ConfigLoader.renderYAML(config))
+    try expect(restored.securityMonitor.enabled, "integrity monitor config enabled")
+    try expect(restored.securityMonitor.intervalMinutes == 45, "integrity scan interval")
+    try expect(
+      restored.securityMonitor.categories == config.securityMonitor.categories,
+      "integrity categories")
+
+    let baseline = SystemIntegritySnapshot(
+      states: ["security.firewall": "enabled", "identity.admin_members": "old"],
+      artifacts: [
+        IntegrityArtifact(
+          kind: .configurationProfile, identifier: "com.example.policy", digest: "old")
+      ])
+    let current = SystemIntegritySnapshot(
+      states: ["security.firewall": "disabled", "identity.admin_members": "new"],
+      artifacts: [
+        IntegrityArtifact(
+          kind: .configurationProfile, identifier: "com.example.policy", digest: "new"),
+        IntegrityArtifact(
+          kind: .launchDaemon, identifier: "com.example.unknown", digest: "new",
+          signed: false),
+      ])
+    let result = SystemIntegrityRuleEngine().evaluate(baseline: baseline, current: current)
+    try expect(result.findings.filter { $0.severity == .critical }.count == 3, "critical rules")
+    let duplicateInventory = SystemIntegritySnapshot(
+      artifacts: [
+        IntegrityArtifact(kind: .systemExtension, identifier: "com.example.ext", digest: "v1"),
+        IntegrityArtifact(kind: .systemExtension, identifier: "com.example.ext", digest: "v2"),
+      ])
+    try expect(duplicateInventory.artifacts.count == 1, "duplicate artifact consolidation")
+
+    let missingSource = SystemIntegritySnapshot(
+      unavailableSources: ["artifacts.configurationProfile"])
+    let unavailableResult = SystemIntegrityRuleEngine().evaluate(
+      baseline: baseline, current: missingSource)
+    try expect(
+      !unavailableResult.findings.contains { $0.title.contains("com.example.policy") },
+      "unavailable source does not report removal")
+
+    let directory = temporaryDirectory("integrity")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = SystemIntegrityStore(directory: directory)
+    try await store.saveBaseline(baseline)
+    let restoredBaseline = try await store.baseline()
+    try expect(restoredBaseline?.fingerprint == baseline.fingerprint, "baseline roundtrip")
+    try await store.append(result.findings, retentionDays: 30)
+    let storedFindings = try await store.findings()
+    let historyStatus = await store.status()
+    try expect(!storedFindings.isEmpty, "integrity history")
+    try expect(historyStatus == .valid(result.findings.count), "integrity hash chain")
+  }
+
   static func testVoiceAndMeetingFeatures() async throws {
     let parser = StructuredVoiceActionParser()
     let profile = try parser.parseTranscript("Wechsle zum Profil Research")

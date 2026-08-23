@@ -123,6 +123,22 @@ public struct AppConfig: Codable, Equatable, Sendable {
     /// client is constructed, and local HTTP clients refuse non-loopback redirects.
     public var strictOffline = false
   }
+  public struct SecurityMonitor: Codable, Equatable, Sendable {
+    /// The monitor is opt-in because it reads broad local system metadata.
+    public var enabled = false
+    /// Periodic reconciliation. Event watchers may request an earlier scan.
+    public var intervalMinutes = 30
+    public var localAIEnabled = true
+    public var notificationMinimumSeverity = "warning"
+    public var voiceEnabled = true
+    public var voiceMinimumSeverity = "critical"
+    public var quietHoursEnabled = true
+    public var quietHoursStart = 22
+    public var quietHoursEnd = 7
+    public var retentionDays = 30
+    public var maximumAlertsPerDay = 6
+    public var categories = IntegrityCategory.allCases.map(\.rawValue)
+  }
   public struct Profiles: Codable, Equatable, Sendable {
     /// User-facing labels keyed by stable profile ID. IDs remain unchanged so conversations,
     /// memories, prompts and provider overrides keep their existing association after a rename.
@@ -188,6 +204,7 @@ public struct AppConfig: Codable, Equatable, Sendable {
   public var api = API()
   public var logging = Logging()
   public var privacy = Privacy()
+  public var securityMonitor = SecurityMonitor()
   public var profiles = Profiles()
   public var spokenResponseMode = "smart_summary"
   public var spokenResponseThreshold = 850
@@ -662,6 +679,20 @@ public enum ConfigLoader {
     guard (0...3_650).contains(c.privacy.localCacheRetentionDays) else {
       throw MiddleAIError.configuration(
         "privacy.local_cache_retention_days must be between 0 and 3650")
+    }
+    let severities = ["info", "warning", "critical"]
+    let supportedIntegrityCategories = Set(IntegrityCategory.allCases.map(\.rawValue))
+    guard (10...1_440).contains(c.securityMonitor.intervalMinutes),
+      severities.contains(c.securityMonitor.notificationMinimumSeverity),
+      severities.contains(c.securityMonitor.voiceMinimumSeverity),
+      (0...23).contains(c.securityMonitor.quietHoursStart),
+      (0...23).contains(c.securityMonitor.quietHoursEnd),
+      (1...365).contains(c.securityMonitor.retentionDays),
+      (1...100).contains(c.securityMonitor.maximumAlertsPerDay),
+      !c.securityMonitor.categories.isEmpty,
+      Set(c.securityMonitor.categories).isSubset(of: supportedIntegrityCategories)
+    else {
+      throw MiddleAIError.configuration("Security monitor settings are invalid")
     }
     let resolvedProfileNames = AppConfig.supportedProfileIDs.map(c.profileDisplayName(for:))
     let normalizedProfileNames = resolvedProfileNames.map { name in

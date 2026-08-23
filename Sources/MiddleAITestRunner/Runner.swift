@@ -65,6 +65,7 @@ struct FixedRouter: ConversationRoutingStrategy {
       ("Local answer and runtime", LocalFeatureRegressionTests.testLocalRuntime),
       ("Local knowledge and memory", LocalFeatureRegressionTests.testLocalContext),
       ("Local selection assistant", LocalFeatureRegressionTests.testLocalTextTransformation),
+      ("System integrity monitor", LocalFeatureRegressionTests.testSystemIntegrityMonitor),
       (
         "Voice actions, adaptive STT and meetings",
         LocalFeatureRegressionTests.testVoiceAndMeetingFeatures
@@ -125,6 +126,9 @@ struct FixedRouter: ConversationRoutingStrategy {
     c.stt.maximumRecordingSeconds = 180
     c.stt.automaticSilenceStop = true
     c.privacy.localCacheRetentionDays = 365
+    c.securityMonitor.enabled = true
+    c.securityMonitor.intervalMinutes = 60
+    c.securityMonitor.notificationMinimumSeverity = "critical"
     c.activeProfile = "coding"
     c.profiles.names["coding"] = "Entwicklung Plus"
     c.profiles.systemPrompts["coding"] = "Antworte mit wartbarem Swift-Code."

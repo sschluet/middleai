@@ -53,6 +53,8 @@ Each release includes a SHA-256 checksum file and a machine-readable Swift depen
 - User-approved global, profile and application-specific STT correction lexicon plus local quality metrics
 - Explicit microphone meeting capture with local transcription, summary, decisions, tasks and Markdown/JSON archive
 - Shared priority-aware inference scheduler and a device-specific local model benchmark
+- Configurable local system-integrity monitor for MDM/Intune profiles, macOS protections, local accounts, certificates, network settings, system extensions and persistence entries
+- User-confirmed baseline, tamper-evident local finding history, bounded notifications, critical voice alerts, safe simulations and optional local-only AI explanations
 
 ## Install and build
 
@@ -102,6 +104,18 @@ Choose **MiddleAI Lokal** under Settings → Connection to use the configured Ol
 The **Strict offline** switch is an enforced network boundary. It accepts only `localhost`, `127.0.0.1` or `::1`, blocks hosted answer providers before their client is created and refuses redirects from a local service to a remote host. A loopback OpenWebUI remains permitted. Enabling the switch automatically changes to MiddleAI Lokal when the current provider is remote.
 
 The local benchmark sends one short, non-persistent request to the selected model and reports time to first token, estimated output speed, RAM, available disk, CPU, thermal state and the model-size class recommended for that Mac. It is a practical compatibility measurement, not a synthetic hardware score.
+
+### Local system-integrity monitor
+
+Settings → System Monitor provides an optional local security layer. It compares a user-confirmed baseline with the current MDM enrollment, configuration-profile contents, managed preferences, firewall, stealth mode, FileVault, Gatekeeper, System Integrity Protection, SSH and Remote Management state, local users and administrators, system certificates, DNS and proxy settings, system extensions, LaunchAgents, LaunchDaemons, privileged helpers and the MiddleAI executable. It also evaluates narrowly filtered local security events and repeated Microsoft Intune agent errors. No scan result or log text is sent to a hosted provider.
+
+The default interval is 30 minutes. Important launch and managed-preference folders additionally trigger a debounced scan. Findings are stored under `~/.middleai/system-integrity` with owner-only permissions; the baseline carries an integrity hash and the bounded finding history uses a hash chain. macOS notifications are deduplicated and rate-limited. Voice alerts are restricted to the configured severity and quiet hours and speak only a generic warning rather than log content.
+
+Optional natural-language explanations use only the local intelligence source selected in Settings: Apple Intelligence, Ollama or llama.cpp. If no local model is available, deterministic detection continues and no hosted fallback occurs. The local model does not assign severity and receives findings as untrusted data.
+
+Create the baseline only while the Mac is in a known, trusted state. Review findings before replacing it. Built-in information, warning and critical simulations let you test the interface, notifications and voice output without changing the system.
+
+This implementation deliberately requires no Apple Developer account. It does not install an Endpoint Security system extension and therefore cannot observe every process or file access in real time. It is an integrity and anomaly assistant, not an antivirus, EDR or proof that an attack occurred. A fully compromised administrator can also alter local data; the integrity checks make accidental or unsophisticated changes visible but cannot provide external cryptographic attestation.
 
 ### Local knowledge and personal memory
 

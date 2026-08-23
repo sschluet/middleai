@@ -3,17 +3,24 @@ import FluidAudio
 import MiddleAICore
 import SwiftUI
 import UniformTypeIdentifiers
+import UserNotifications
 
 extension Notification.Name {
   static let middleAIReopen = Notification.Name("MiddleAIReopen")
   static let middleAIQuickInputFocus = Notification.Name("MiddleAIQuickInputFocus")
 }
 
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.applicationIconImage = MiddleAIIconProvider.image
     NSApp.setActivationPolicy(.accessory)
+    UNUserNotificationCenter.current().delegate = self
   }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification
+  ) async -> UNNotificationPresentationOptions { [.banner, .sound] }
 
   func applicationShouldHandleReopen(
     _ sender: NSApplication, hasVisibleWindows flag: Bool
@@ -114,6 +121,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     localContextStore.map { LocalKnowledgeBase(store: $0) }
   private lazy var profileMemoryService: ProfileMemoryService? =
     localContextStore.map { ProfileMemoryService(store: $0) }
+  lazy var integrityMonitor = SystemIntegrityMonitorController(
+    configProvider: { [weak self] in self?.config ?? AppConfig() },
+    voiceHandler: { [weak self] message in self?.engine?.ttsQueue.enqueue(message) })
   init() {
     let defaults = UserDefaults.standard
     if defaults.object(forKey: LaunchAtLoginController.preferenceKey) == nil {
@@ -183,6 +193,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.beginTextServiceRequest(text)
     }
     menuBarController = MenuBarController(state: self)
+    integrityMonitor.start()
     Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: 350_000_000)
       self?.applyLaunchAtLoginPreference()
@@ -508,6 +519,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         config.privacy.localCacheRetentionDays == 0
         ? "Lokaler Cache wird dauerhaft aufbewahrt"
         : "Lokale Aufbewahrung wurde gespeichert"
+    } catch {
+      lastError = error.localizedDescription
+    }
+  }
+  func saveSystemIntegritySettings() {
+    do {
+      try ConfigLoader.save(config)
+      integrityMonitor.applyConfiguration()
     } catch {
       lastError = error.localizedDescription
     }

@@ -22,6 +22,11 @@ MiddleAI is local-first and transmits only the user's assistant-mode request and
 - The local SQLite cache is protected with owner-only file permissions. It is not independently SQLCipher-encrypted; encryption at rest therefore depends on macOS FileVault. Ephemeral sessions can be used when a conversation should not be written to the cache.
 - A newly opened conversation is retained only in memory until its first complete exchange; cancelled or failed empty drafts are never written to SQLite.
 - Private mode is runtime-only and uses an in-memory conversation store. Leaving it destroys that session. It does not change the retention policy of OpenWebUI, OpenAI or OpenRouter.
+- The optional System Monitor stores normalized states, hashes and bounded evidence locally under `~/.middleai/system-integrity` with `0700`/`0600` permissions. Its baseline is content-hashed and its finding history is hash-chained.
+- System Monitor severity is assigned by deterministic rules. Optional explanations can use only Apple Intelligence or a loopback Ollama/llama.cpp endpoint; no finding or log content has a hosted fallback.
+- Notification content is generic, deduplicated and rate-limited. Voice alerts never read raw log content, respect quiet hours and are limited to the configured severity.
+- System Monitor collectors execute fixed absolute Apple tool paths through `Process`, with bounded output and timeouts. They do not interpolate findings into a shell command.
+- The current ad-hoc build has no Endpoint Security entitlement or system extension. Monitoring is scheduled and directory-event triggered and must not be treated as complete EDR coverage, malware proof or external attestation.
 
 Optional model downloads remain subject to their own licenses. Voxtral is CC BY-NC 4.0 and must not be used for commercial or business purposes. See `THIRD_PARTY_NOTICES.md` for sources and terms.
 

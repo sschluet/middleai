@@ -144,3 +144,28 @@ complete no-op with an empty store. The local meeting coordinator has an explici
 lifecycle, bounded microphone capture, local transcription and deterministic Markdown/JSON export.
 Its core audio-source protocol can represent system audio, but the shipping UI deliberately uses the
 selected microphone and requests no Screen Recording permission.
+
+## Local system-integrity monitor
+
+`SystemIntegrityCollector` invokes only fixed absolute macOS tool paths and bounded arguments; it
+never invokes a shell. It normalizes security states and stores hashes instead of full account,
+certificate, DNS or proxy output. It inventories configuration profiles, system extensions,
+LaunchAgents, LaunchDaemons and privileged helpers, including code-signing status where macOS
+exposes it. A small `DispatchSource` watcher coalesces changes in relevant directories, while
+`NSBackgroundActivityScheduler` performs the configurable periodic scan without a busy timer.
+
+`SystemIntegrityRuleEngine` is deterministic and assigns severity before any model is called. A
+temporarily unavailable source is excluded from comparison so a permission or command failure does
+not appear as a removal. The user must explicitly establish or replace the baseline. The baseline
+has a content hash, and the owner-only bounded finding history has a forward hash chain.
+
+Optional explanation runs at background priority through `InferenceScheduler` and accepts only
+Apple Intelligence or an OpenAI-compatible loopback Ollama/llama.cpp endpoint. There is no hosted
+fallback. Log-derived content is delimited as untrusted data and cannot change rule severity or
+execute an action. Notifications are per-finding deduplicated and rate-limited; spoken alerts are
+generic, severity-gated and quiet-hour aware.
+
+The shipping build intentionally does not use Endpoint Security or a system extension because those
+capabilities require Apple-controlled entitlements, Developer ID signing and notarization. The
+monitor therefore provides scheduled and event-triggered state integrity plus selected local log
+signals, not complete real-time endpoint telemetry.

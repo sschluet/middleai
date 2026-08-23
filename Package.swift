@@ -43,7 +43,9 @@ let package = Package(
         .linkedFramework("AudioToolbox"),
         .linkedFramework("CoreAudio"),
         .linkedFramework("EventKit"),
+        .linkedFramework("Security"),
         .linkedFramework("ServiceManagement"),
+        .linkedFramework("UserNotifications"),
       ]
     ),
     .executableTarget(name: "MiddleAITestRunner", dependencies: ["MiddleAICore"]),

@@ -2,6 +2,22 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.9.0 — 2026-08-23
+
+### Local system integrity
+
+- Added an optional local System Monitor with a 30-minute default interval and debounced checks after relevant filesystem changes.
+- Added user-confirmed baselines for MDM and Intune profiles, macOS security controls, users and administrators, certificates, DNS, proxies, system extensions, persistent startup entries and the MiddleAI executable.
+- Added deterministic severity rules, source-aware false-positive suppression, repeated authentication and Intune error signals, local history retention and tamper detection for baseline and history files.
+- Added rate-limited macOS notifications, configurable critical voice alerts with quiet hours and safe information, warning and critical simulations.
+- Added optional explanations through Apple Intelligence, Ollama or llama.cpp with a strict local-only boundary and no hosted fallback.
+
+### Interface and documentation
+
+- Added a dedicated System Monitor settings area with scope, schedule, alert thresholds, tests, findings, limitations and guided baseline management.
+- Added in-app help, architecture and security documentation plus a GitHub Pages feature overview.
+- Deliberately omitted Endpoint Security and system-extension features that require Apple Developer entitlements, Developer ID signing and notarization.
+
 ## 0.8.3 — 2026-08-14
 
 ### Audio device handoff

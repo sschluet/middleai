@@ -105,6 +105,7 @@ final class MenuBarController: NSObject {
     menu.addItem(actionItem("Hilfe & Systemanforderungen…", action: #selector(showHelp)))
     menu.addItem(actionItem("Neue Unterhaltung", action: #selector(startNewConversation)))
     menu.addItem(actionItem("Sprachausgabe stoppen", action: #selector(stopSpeaking)))
+    menu.addItem(actionItem("Systemwächter…", action: #selector(showSystemIntegrityMonitor)))
     menu.addItem(.separator())
     if state?.meetingController.isRecording == true {
       menu.addItem(
@@ -166,6 +167,9 @@ final class MenuBarController: NSObject {
   @objc private func cancelMeeting() { state?.cancelMeeting() }
   @objc private func openProviderPage() { state?.openCurrentChat() }
   @objc private func showDiagnostics() { state?.showSetupWindow(initialPane: .diagnostics) }
+  @objc private func showSystemIntegrityMonitor() {
+    state?.showSetupWindow(initialPane: .securityMonitor)
+  }
   @objc private func quit() { NSApplication.shared.terminate(nil) }
 
   @objc private func selectProfile(_ sender: NSMenuItem) {
