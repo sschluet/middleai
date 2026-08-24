@@ -2,6 +2,13 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.10.2 — 2026-08-24
+
+- Removed the periodic `sfltool dumpbtm` collector after current macOS versions were confirmed to request `system.privilege.admin` and open a recurring SecurityAgent password dialog.
+- Kept the protected Login Items inventory as a transparent non-critical coverage gap so existing baselines do not create false removal findings.
+- Continued monitoring non-interactive persistence sources such as LaunchAgents, LaunchDaemons, privileged helpers, cron tasks, SSH keys and shell startup files.
+- Added a repository policy guard, regression coverage and in-app, security and website documentation for the no-background-password boundary.
+
 ## 0.10.1 — 2026-08-23
 
 - Kept all previously monitored 0.9 baseline areas active while new 0.10 collectors wait for explicit baseline confirmation.

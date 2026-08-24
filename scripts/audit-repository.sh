@@ -37,6 +37,11 @@ if git grep -I -n -i -E -- 'fluid[[:space:]]?voice' -- ':!scripts/audit-reposito
   exit 1
 fi
 
+if git grep -I -n -F -- 'arguments: ["dumpbtm"]' -- '*.swift'; then
+  print -u2 'Background scans must not invoke sfltool dumpbtm because it requests admin authorization.'
+  exit 1
+fi
+
 # OpenAI and OpenRouter are supported answer providers. Product names are allowed when they
 # describe that integration; obsolete product-comparison references remain blocked above.
 

@@ -409,6 +409,9 @@ h2 { margin-bottom: 0; font-size: clamp(43px, 5vw, 68px); line-height: 1.03; let
 .monitor-limits > div > span { color: #f1ad68; font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .monitor-limits h3 { margin: 8px 0 0; font-size: 26px; line-height: 1.12; letter-spacing: -.035em; }
 .monitor-limits > p { margin: 0; color: #8b93a5; font-size: 13px; }
+.monitor-auth-note { margin-top: 22px; padding: 20px 24px; display: grid; grid-template-columns: .55fr 1.45fr; gap: 42px; border: 1px solid rgba(244,184,92,.18); border-radius: 17px; background: rgba(244,184,92,.035); }
+.monitor-auth-note strong { color: #e7bd78; font-size: 13px; }
+.monitor-auth-note p { margin: 0; color: #8992a4; font-size: 12px; }
 .monitor-cta { margin-top: 78px; padding: 32px 36px; display: flex; align-items: center; justify-content: space-between; gap: 35px; border: 1px solid var(--line); border-radius: 24px; background: linear-gradient(120deg, rgba(30,35,55,.92), rgba(13,17,28,.92)); }
 .monitor-cta > div:first-child { display: flex; flex-direction: column; }
 .monitor-cta > div:first-child span { color: #737c90; font-size: 9px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
@@ -489,7 +492,7 @@ h2 { margin-bottom: 0; font-size: clamp(43px, 5vw, 68px); line-height: 1.03; let
   .split-heading { grid-template-columns: 1fr; gap: 25px; }.mode-grid { gap: 14px; }
   .privacy-grid { grid-template-columns: 1fr; }.privacy-copy { max-width: 700px; }.privacy-diagram { max-width: 670px; width: 100%; margin-inline: auto; }
   .system-monitor-intro { grid-template-columns: 1fr; gap: 50px; }.system-monitor-copy { max-width: 760px; }.workflow-grid { grid-template-columns: 1fr 1fr; }.workflow-grid li:nth-child(2) { border-right: 0; }.workflow-grid li:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .monitor-limits { grid-template-columns: 1fr; gap: 24px; }.monitor-cta { align-items: flex-start; flex-direction: column; }
+  .monitor-limits, .monitor-auth-note { grid-template-columns: 1fr; gap: 24px; }.monitor-cta { align-items: flex-start; flex-direction: column; }
   .intelligence-card { padding: 48px; gap: 45px; }
   .requirements-grid { grid-template-columns: 1fr 1fr; }.requirement:nth-child(2) { border-right: 0; }.requirement:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .download-card { padding: 58px; grid-template-columns: 180px 1fr; gap: 45px; }.download-card > img { width: 170px; }

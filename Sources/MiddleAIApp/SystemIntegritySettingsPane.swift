@@ -158,7 +158,7 @@ struct SystemIntegritySettingsPane: View {
         "Regelmäßig alle \(state.config.securityMonitor.intervalMinutes) Minuten prüfen",
         value: $state.config.securityMonitor.intervalMinutes, in: 10...1_440, step: 5)
       Text(
-        "Zusätzlich reagiert MiddleAI zeitnah auf Änderungen an Autostart-, SSH-, Shell- und verwalteten Einstellungsdateien. Die regelmäßige Prüfung umfasst außerdem Anmeldeobjekte, Crontab, Zertifikate, Profile, Microsoft Defender und ausgewählte lokale Sicherheitslogs. macOS darf Hintergrundprüfungen zur Schonung von Akku und Leistung verschieben."
+        "Zusätzlich reagiert MiddleAI zeitnah auf Änderungen an Autostart-, SSH-, Shell- und verwalteten Einstellungsdateien. Die regelmäßige Prüfung umfasst außerdem Crontab, Zertifikate, Profile, Microsoft Defender und ausgewählte lokale Sicherheitslogs. macOS darf Hintergrundprüfungen zur Schonung von Akku und Leistung verschieben."
       )
       .font(.caption).foregroundStyle(.secondary)
     }
@@ -295,8 +295,12 @@ struct SystemIntegritySettingsPane: View {
       symbol: "info.circle"
     ) {
       Text(
-        "MiddleAI überwacht Konfigurationsprofile einschließlich sicherheitsrelevanter Payloads, verwaltete Einstellungen, MDM-Zustand, zentrale macOS-Schutzfunktionen, Benutzer und Administratoren, einzelne Zertifikate und Vertrauensstellungen, DNS und Proxy, Systemerweiterungen, Anmeldeobjekte, Crontab, SSH-Schlüssel, Shell-Startdateien, persistente Autostarteinträge, MiddleAI selbst, Microsoft Defender sowie ausgewählte lokale Sicherheits- und Intune-Fehler."
+        "MiddleAI überwacht Konfigurationsprofile einschließlich sicherheitsrelevanter Payloads, verwaltete Einstellungen, MDM-Zustand, zentrale macOS-Schutzfunktionen, Benutzer und Administratoren, einzelne Zertifikate und Vertrauensstellungen, DNS und Proxy, Systemerweiterungen, Crontab, SSH-Schlüssel, Shell-Startdateien, persistente Autostarteinträge, MiddleAI selbst, Microsoft Defender sowie ausgewählte lokale Sicherheits- und Intune-Fehler."
       )
+      Text(
+        "Automatische Prüfungen fragen niemals nach einem Administratorpasswort. Die geschützte macOS-Anmeldeobjekt-Datenbank wird als nicht verfügbar angezeigt, wenn sie nur über eine interaktive Systemfreigabe lesbar wäre. LaunchAgents, LaunchDaemons und privilegierte Hilfsprogramme bleiben davon unabhängig überwacht."
+      )
+      .font(.caption).foregroundStyle(.secondary)
       Text(
         "Ohne Apple Developer Account verwendet MiddleAI keine Endpoint-Security-Systemerweiterung. Es sieht daher nicht jeden Prozess- oder Dateizugriff in Echtzeit und ersetzt weder Microsoft Defender noch ein professionelles EDR/SOC. Eine Meldung ist ein Prüfhinweis, kein Beweis für einen Angriff."
       )

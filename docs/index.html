@@ -75,7 +75,7 @@
             <a class="button button-secondary" href="#how-it-works">So funktioniert es</a>
           </div>
           <div class="hero-meta">
-            <span class="version-label">Version 0.10.1</span>
+            <span class="version-label">Version 0.10.2</span>
             <span>macOS 14+</span>
             <span>Apache 2.0</span>
           </div>
@@ -301,7 +301,7 @@
             <div class="feature-number">16</div>
             <div class="feature-copy">
               <h3>Dein Mac behält seinen Sollzustand.</h3>
-              <p>Ein lokaler Systemwächter vergleicht Intune- und MDM-Profile, macOS-Schutzfunktionen, Defender, Zertifikate, Login Items und weitere Persistenzquellen mit einer vollständig geprüften Baseline. Befunde besitzen einen nachvollziehbaren Lebenszyklus und öffnen per Klick ihre lokale Quelle.</p>
+              <p>Ein lokaler Systemwächter vergleicht Intune- und MDM-Profile, macOS-Schutzfunktionen, Defender, Zertifikate und nicht-interaktiv lesbare Persistenzquellen mit einer vollständig geprüften Baseline. Befunde besitzen einen nachvollziehbaren Lebenszyklus und öffnen per Klick ihre lokale Quelle.</p>
               <div class="feature-tags"><span>Keychain-HMAC</span><span>Defender</span><span>Timeline</span><span>Quellen öffnen</span><span>Ohne Cloud-Logs</span></div>
               <a class="text-link feature-detail-link" href="#systemwaechter">Systemwächter im Detail <span>→</span></a>
             </div>
@@ -353,7 +353,7 @@
                 </div>
                 <div class="dashboard-finding finding-reviewed">
                   <span class="finding-indicator"></span>
-                  <div><strong>Anmeldeobjekt aktualisiert</strong><small>Login Items · von dir geprüft</small></div>
+                  <div><strong>LaunchAgent aktualisiert</strong><small>Autostart · von dir geprüft</small></div>
                   <span class="finding-state">Geprüft</span>
                 </div>
               </div>
@@ -394,7 +394,7 @@
               <article class="capability-card reveal">
                 <div class="capability-icon">ID</div>
                 <h4>Konten &amp; Persistenz</h4>
-                <p>Lokale Benutzer und Administratoren, LaunchAgents, LaunchDaemons, privilegierte Helfer, Login Items, Crontab, SSH-Schlüssel und Shell-Startdateien.</p>
+                <p>Lokale Benutzer und Administratoren, LaunchAgents, LaunchDaemons, privilegierte Helfer, Crontab, SSH-Schlüssel und Shell-Startdateien.</p>
               </article>
               <article class="capability-card reveal reveal-delay">
                 <div class="capability-icon">TR</div>
@@ -459,6 +459,11 @@
               <h3>Ein Prüfhinweis ist kein Beweis für einen Angriff.</h3>
             </div>
             <p>Der Systemwächter ergänzt Antivirus, Microsoft Defender und ein professionelles EDR oder SOC. Ohne Developer-ID-pflichtige Endpoint-Security-Erweiterung sieht er nicht jeden Prozess- oder Dateizugriff in Echtzeit. Auch legitime Admin- oder Intune-Änderungen können einen Befund auslösen. Vollständige Kontrolle über Benutzer, Schlüsselbund und MiddleAI selbst liegt außerhalb seines belastbaren Schutzmodells.</p>
+          </div>
+
+          <div class="monitor-auth-note reveal">
+            <strong>Keine Passwortdialoge im Hintergrund</strong>
+            <p>Automatische Scans fordern niemals Administratorrechte an. Verlangt macOS für eine geschützte Quelle wie die Anmeldeobjekt-Datenbank eine interaktive Freigabe, zeigt MiddleAI sie transparent als nicht verfügbar an. Alle übrigen nicht-interaktiven Persistenzquellen werden weiter geprüft.</p>
           </div>
 
           <div class="monitor-cta reveal">

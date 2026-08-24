@@ -171,6 +171,12 @@ enum LocalFeatureRegressionTests {
     let incomplete = SystemIntegritySnapshot(
       unavailableSources: ["security.firewall"], checkedSources: ["security.filevault"])
     try expect(!incomplete.coverageReport.isSuitableForBaseline, "critical baseline coverage")
+    let protectedLoginItems = SystemIntegritySnapshot(
+      unavailableSources: ["artifacts.loginItem"])
+    try expect(
+      protectedLoginItems.coverageReport.gaps.first { $0.id == "artifacts.loginItem" }?.critical
+        == false,
+      "protected login items stay a transparent non-critical coverage gap")
     let sourcedOld = IntegrityArtifact(
       kind: .launchAgent, identifier: "com.example.agent", digest: "same")
     let sourcedNew = IntegrityArtifact(

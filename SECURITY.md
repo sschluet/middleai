@@ -26,6 +26,7 @@ MiddleAI is local-first and transmits only the user's assistant-mode request and
 - System Monitor severity is assigned by deterministic rules. Optional explanations can use only Apple Intelligence or a loopback Ollama/llama.cpp endpoint; no finding or log content has a hosted fallback.
 - Notification content is generic, deduplicated and rate-limited. Voice alerts never read raw log content, respect quiet hours and are limited to the configured severity.
 - System Monitor collectors execute fixed absolute Apple tool paths through `Process`, with bounded output and timeouts. They do not interpolate findings into a shell command.
+- Background scans never invoke `sfltool dumpbtm`, because current macOS versions request administrator authorization for that protected Login Items inventory. MiddleAI reports the source as unavailable instead of opening SecurityAgent.
 - Clickable finding sources are typed, collector-controlled values. MiddleAI opens only allow-listed local files, system applications and `x-apple.systempreferences:` URLs; log contents can never supply a path or URL to open.
 - A missing critical collector source prevents baseline confirmation. Temporarily unavailable artifact sources are not interpreted as removals.
 - The current ad-hoc build has no Endpoint Security entitlement or system extension. Monitoring is scheduled and directory-event triggered and must not be treated as complete EDR coverage, malware proof or external attestation.

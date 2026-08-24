@@ -99,6 +99,14 @@ final class SystemIntegrityMonitorTests: XCTestCase {
     XCTAssertTrue(snapshot.coverageReport.criticalGaps.contains { $0.id == "security.firewall" })
   }
 
+  func testUnavailableLoginItemInventoryIsTransparentButNotBaselineCritical() {
+    let snapshot = SystemIntegritySnapshot(unavailableSources: ["artifacts.loginItem"])
+    let gap = snapshot.coverageReport.gaps.first { $0.id == "artifacts.loginItem" }
+
+    XCTAssertEqual(gap?.title, "Anmeldeobjekte")
+    XCTAssertEqual(gap?.critical, false)
+  }
+
   func testFindingLifecycleAcknowledgesResolvesAndReopens() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "middleai-integrity-lifecycle-\(UUID().uuidString)", isDirectory: true)

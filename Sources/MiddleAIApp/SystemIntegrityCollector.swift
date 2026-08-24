@@ -224,15 +224,11 @@ struct SystemIntegrityCollector: Sendable {
       }
     }
 
-    let loginResult = SafeCommandRunner.run(
-      executable: "/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 12,
-      maximumBytes: 1_200_000)
-    if loginResult.status == 0, !loginResult.timedOut {
-      artifacts += Self.loginItemArtifacts(from: loginResult.output)
-      checked.insert("artifacts.loginItem")
-    } else {
-      unavailable.append("artifacts.loginItem")
-    }
+    // Current macOS versions request system.privilege.admin when `sfltool dumpbtm` reads the
+    // protected Background Task Management database. A periodic background scan must never open
+    // SecurityAgent or ask for a password. Keep the source explicitly unavailable so an existing
+    // baseline cannot mistake the missing inventory for removed login items.
+    unavailable.append("artifacts.loginItem")
 
     let cronResult = SafeCommandRunner.run(
       executable: "/usr/bin/crontab", arguments: ["-l"], timeout: 5)
@@ -447,27 +443,6 @@ struct SystemIntegrityCollector: Sendable {
           locator: "/System/Applications/Utilities/Keychain Access.app", detail: name,
           collectorID: "artifacts.rootCertificate"),
         risk: .critical)
-    }
-  }
-
-  private static func loginItemArtifacts(from text: String) -> [IntegrityArtifact] {
-    let records = captures(pattern: #"(?ms)(^\s*#\d+:.*?)(?=^\s*#\d+:|\z)"#, in: text)
-    return records.prefix(750).compactMap { block -> IntegrityArtifact? in
-      let identifier = firstCapture(pattern: #"(?m)^\s*Identifier:\s*(.+?)\s*$"#, in: block)
-      let name = firstCapture(pattern: #"(?m)^\s*Name:\s*(.+?)\s*$"#, in: block)
-      guard let stable = identifier ?? name, !stable.isEmpty else { return nil }
-      let team = firstCapture(pattern: #"(?m)^\s*Team Identifier:\s*(.+?)\s*$"#, in: block)
-      let disposition = firstCapture(pattern: #"(?m)^\s*Disposition:\s*(.+?)\s*$"#, in: block) ?? ""
-      let type = firstCapture(pattern: #"(?m)^\s*Type:\s*(.+?)\s*$"#, in: block) ?? ""
-      return IntegrityArtifact(
-        kind: .loginItem, identifier: stable,
-        digest: IntegrityHash.sha256(
-          normalized("\(stable)\n\(team ?? "")\n\(disposition)\n\(type)")),
-        teamIdentifier: team,
-        source: IntegrityFindingSource(
-          kind: .systemSettings, title: "Anmeldeobjekte & Erweiterungen",
-          locator: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
-          detail: name, collectorID: "artifacts.loginItem"))
     }
   }
 
