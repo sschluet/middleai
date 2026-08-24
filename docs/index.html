@@ -6,13 +6,13 @@
     <meta name="theme-color" content="#070911">
     <meta
       name="description"
-      content="MiddleAI ist die lokale Sprachschicht für macOS: diktieren, vollständig lokal mit Ollama oder llama.cpp arbeiten, eigenes Wissen nutzen und Antworten natürlich vorlesen lassen."
+      content="MiddleAI ist die lokale Sprachschicht für macOS: lokal diktieren, mit privaten KI-Modellen arbeiten und sicherheitsrelevante Systemänderungen ohne Cloud-Logs überwachen."
     >
     <meta property="og:type" content="website">
     <meta property="og:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
     <meta
       property="og:description"
-      content="Lokales Diktat, wählbare KI-Anbieter und natürliche Sprachausgabe – nativ für macOS."
+      content="Lokales Diktat, wählbare KI-Anbieter, natürliche Sprachausgabe und ein lokaler Systemwächter – nativ für macOS."
     >
     <meta property="og:image" content="https://sschluet.github.io/middleai/assets/og.png">
     <meta property="og:url" content="https://sschluet.github.io/middleai/">
@@ -20,7 +20,7 @@
     <meta name="twitter:title" content="MiddleAI – Deine Stimme. Dein Mac. Deine KI.">
     <meta
       name="twitter:description"
-      content="Lokales Diktat, lokale KI-Antworten, eigenes Wissen und sichere Sprachaktionen für macOS."
+      content="Lokales Diktat, lokale KI-Antworten und ein Systemwächter für prüfbare Veränderungen auf deinem Mac."
     >
     <meta name="twitter:image" content="https://sschluet.github.io/middleai/assets/og.png">
     <link rel="canonical" href="https://sschluet.github.io/middleai/">
@@ -43,6 +43,7 @@
         </button>
         <nav id="main-nav" class="main-nav" aria-label="Hauptnavigation">
           <a href="#features">Features</a>
+          <a href="#systemwaechter">Systemwächter</a>
           <a href="#privacy">Datenschutz</a>
           <a href="#requirements">Anforderungen</a>
           <a href="#faq">FAQ</a>
@@ -302,8 +303,171 @@
               <h3>Dein Mac behält seinen Sollzustand.</h3>
               <p>Ein lokaler Systemwächter vergleicht Intune- und MDM-Profile, macOS-Schutzfunktionen, Defender, Zertifikate, Login Items und weitere Persistenzquellen mit einer vollständig geprüften Baseline. Befunde besitzen einen nachvollziehbaren Lebenszyklus und öffnen per Klick ihre lokale Quelle.</p>
               <div class="feature-tags"><span>Keychain-HMAC</span><span>Defender</span><span>Timeline</span><span>Quellen öffnen</span><span>Ohne Cloud-Logs</span></div>
+              <a class="text-link feature-detail-link" href="#systemwaechter">Systemwächter im Detail <span>→</span></a>
             </div>
           </article>
+        </div>
+      </section>
+
+      <section id="systemwaechter" class="section system-monitor-section">
+        <div class="section-shell">
+          <div class="system-monitor-intro">
+            <div class="system-monitor-copy reveal">
+              <div class="section-kicker">Lokaler Systemwächter</div>
+              <h2>Veränderungen sehen,<br><span>bevor sie zum blinden Fleck werden.</span></h2>
+              <p>
+                MiddleAI erfasst einen von dir geprüften Sollzustand deines Macs und vergleicht
+                ihn in einem konfigurierbaren Intervall mit dem aktuellen System. Wichtige
+                Autostart-, SSH-, Shell- und verwaltete Einstellungsdateien lösen zusätzlich
+                eine zeitnahe Prüfung aus. So werden neue Profile, geänderte
+                Schutzfunktionen, unbekannte Autostarts oder auffällige lokale Ereignisse sichtbar,
+                ohne Protokolle oder Befunde an einen Cloud-Dienst zu senden.
+              </p>
+              <div class="monitor-principles" aria-label="Grundprinzipien des Systemwächters">
+                <span><i></i>Regelbasiert erkennen</span>
+                <span><i></i>Optional lokal erklären</span>
+                <span><i></i>Bewusst prüfen</span>
+              </div>
+            </div>
+
+            <div class="monitor-dashboard reveal reveal-delay" aria-label="Beispielansicht des lokalen Systemwächters">
+              <div class="dashboard-topline">
+                <div><span class="dashboard-status-dot"></span><strong>Systemwächter aktiv</strong></div>
+                <small>Beispielansicht · alle 30 Minuten</small>
+              </div>
+              <div class="dashboard-summary">
+                <div><strong>18/18</strong><span>Quellen geprüft</span></div>
+                <div><strong>2</strong><span>Offene Befunde</span></div>
+                <div><strong>1</strong><span>Geprüft</span></div>
+              </div>
+              <div class="dashboard-findings">
+                <div class="dashboard-finding finding-critical">
+                  <span class="finding-indicator"></span>
+                  <div><strong>Defender-Schutzstatus verändert</strong><small>Microsoft Defender · gerade erkannt</small></div>
+                  <span class="finding-state">Neu</span>
+                </div>
+                <div class="dashboard-finding finding-warning">
+                  <span class="finding-indicator"></span>
+                  <div><strong>Konfigurationsprofil hinzugefügt</strong><small>MDM-Profile · Quelle öffnen</small></div>
+                  <span class="finding-state">Anhaltend</span>
+                </div>
+                <div class="dashboard-finding finding-reviewed">
+                  <span class="finding-indicator"></span>
+                  <div><strong>Anmeldeobjekt aktualisiert</strong><small>Login Items · von dir geprüft</small></div>
+                  <span class="finding-state">Geprüft</span>
+                </div>
+              </div>
+              <div class="dashboard-footer"><span>Baseline authentifiziert</span><b>Keychain-HMAC</b></div>
+            </div>
+          </div>
+
+          <div class="monitor-workflow reveal" aria-labelledby="monitor-workflow-heading">
+            <div class="monitor-subheading">
+              <span>So arbeitet MiddleAI</span>
+              <h3 id="monitor-workflow-heading">Vom vertrauenswürdigen Zustand zum prüfbaren Befund.</h3>
+            </div>
+            <ol class="workflow-grid">
+              <li><b>01</b><div><strong>Zustand erfassen</strong><p>MiddleAI prüft die aktivierten lokalen Quellen und zeigt fehlende Abdeckung offen an.</p></div></li>
+              <li><b>02</b><div><strong>Baseline bestätigen</strong><p>Erst deine ausdrückliche Freigabe macht den geprüften Zustand zur Vergleichsbasis.</p></div></li>
+              <li><b>03</b><div><strong>Änderungen erkennen</strong><p>Regeln vergleichen normalisierte Zustände, Fingerabdrücke und technische Kennungen.</p></div></li>
+              <li><b>04</b><div><strong>Ursache prüfen</strong><p>Öffne die lokale Quelle, markiere den Fund als geprüft oder aktualisiere bewusst die Baseline.</p></div></li>
+            </ol>
+          </div>
+
+          <div class="monitor-capabilities">
+            <div class="monitor-subheading centered reveal">
+              <span>Überwachte Bereiche</span>
+              <h3>Ein breiter Blick auf sicherheitsrelevante Veränderungen.</h3>
+              <p>Du entscheidest in den Einstellungen, welche Kategorien aktiv sind. Nicht verfügbare Quellen werden als Lücke ausgewiesen und nicht fälschlich als Entfernung gewertet.</p>
+            </div>
+            <div class="capability-grid">
+              <article class="capability-card reveal">
+                <div class="capability-icon">OS</div>
+                <h4>macOS-Schutz</h4>
+                <p>Firewall und Stealth Mode, FileVault, Gatekeeper, System Integrity Protection, Remote Login und Remote Management.</p>
+              </article>
+              <article class="capability-card reveal reveal-delay">
+                <div class="capability-icon">MDM</div>
+                <h4>MDM &amp; Intune</h4>
+                <p>Enrollment, Server, Konfigurationsprofile, sicherheitsrelevante Payloads, verwaltete Einstellungen und wiederholte lokale Intune-Fehler.</p>
+              </article>
+              <article class="capability-card reveal">
+                <div class="capability-icon">ID</div>
+                <h4>Konten &amp; Persistenz</h4>
+                <p>Lokale Benutzer und Administratoren, LaunchAgents, LaunchDaemons, privilegierte Helfer, Login Items, Crontab, SSH-Schlüssel und Shell-Startdateien.</p>
+              </article>
+              <article class="capability-card reveal reveal-delay">
+                <div class="capability-icon">TR</div>
+                <h4>Vertrauen &amp; Netzwerk</h4>
+                <p>Einzelne Zertifikate und Vertrauensstellungen, Systemerweiterungen, DNS- und Proxy-Einstellungen, der lokale Microsoft-Defender-Status und MiddleAI selbst.</p>
+              </article>
+            </div>
+          </div>
+
+          <div class="monitor-details-grid">
+            <article class="monitor-detail-card monitor-timeline reveal">
+              <div class="monitor-subheading">
+                <span>Nachvollziehbarer Lebenszyklus</span>
+                <h3>Kein flüchtiger Alarm, sondern eine lokale Timeline.</h3>
+              </div>
+              <div class="lifecycle-flow" aria-label="Lebenszyklus eines Befunds">
+                <span class="active">Neu</span><i></i><span>Anhaltend</span><i></i><span>Eskaliert</span><i></i><span>Geprüft</span><i></i><span>Behoben</span>
+              </div>
+              <p>Wiederkehrende Abweichungen bleiben zusammengeführt. Verschwindet die Ursache, wird der Befund automatisch als behoben geführt. Ansichten für offen, behoben und alle Befunde erhalten den Verlauf; ein lokaler Markdown-Bericht lässt sich jederzeit exportieren.</p>
+            </article>
+
+            <article class="monitor-detail-card reveal reveal-delay">
+              <div class="monitor-subheading">
+                <span>Direkt zur Ursache</span>
+                <h3>Ein Klick öffnet die kontrollierte Quelle.</h3>
+              </div>
+              <p>Je nach Befund öffnet MiddleAI die betroffene Datei oder ihren Ordner, die passende Systemeinstellung, Microsoft Defender, die Schlüsselbundverwaltung, die Konsole oder lokale Intune-Protokolle. Ziele stammen ausschließlich aus einer festen, kontrollierten Liste.</p>
+              <div class="source-chips"><span>Systemeinstellungen</span><span>Defender</span><span>Schlüsselbund</span><span>Konsole</span><span>Datei oder Ordner</span></div>
+            </article>
+
+            <article class="monitor-detail-card reveal">
+              <div class="monitor-subheading">
+                <span>Manipulationsschutz</span>
+                <h3>Baseline und Verlauf werden lokal authentifiziert.</h3>
+              </div>
+              <p>Eine zufällig erzeugte, gerätegebundene HMAC-SHA256-Signatur aus dem macOS-Schlüsselbund schützt Baseline und Befundhistorie gegen unbemerkte nachträgliche Änderungen. Gespeichert werden normalisierte Zustände und begrenzte technische Nachweise.</p>
+              <div class="security-stamp"><span>HMAC-SHA256</span><strong>Dieser Mac</strong><small>Schlüssel im macOS-Schlüsselbund</small></div>
+            </article>
+
+            <article class="monitor-detail-card reveal reveal-delay">
+              <div class="monitor-subheading">
+                <span>Benachrichtigungen ohne Alarmflut</span>
+                <h3>Wichtiges melden, Wiederholungen begrenzen.</h3>
+              </div>
+              <p>Systemhinweise und optionale Sprachausgabe besitzen getrennte Abklingzeiten. Kritische Befunde erhalten ein eigenes Tageskontingent, Ruhezeiten bleiben respektiert. Mit sicheren Simulationen testest du Information, Warnung und kritisch, ohne das System zu verändern.</p>
+              <div class="alert-levels"><span>Information</span><span>Warnung</span><span>Kritisch</span></div>
+            </article>
+          </div>
+
+          <div class="local-ai-note reveal">
+            <div>
+              <span class="local-ai-badge">LOCAL AI</span>
+              <h3>Die lokale KI erklärt. Die Regeln entscheiden.</h3>
+              <p>Apple Intelligence, Ollama oder llama.cpp können einen bereits erkannten Befund verständlich einordnen. Kritikalität und Erkennung bleiben deterministisch. Es gibt keinen Fallback zu OpenAI, OpenRouter oder einem entfernten OpenWebUI.</p>
+            </div>
+            <div class="local-ai-providers"><span>Apple Intelligence</span><span>Ollama</span><span>llama.cpp</span></div>
+          </div>
+
+          <div class="monitor-limits reveal">
+            <div>
+              <span>Bewusst klare Grenze</span>
+              <h3>Ein Prüfhinweis ist kein Beweis für einen Angriff.</h3>
+            </div>
+            <p>Der Systemwächter ergänzt Antivirus, Microsoft Defender und ein professionelles EDR oder SOC. Ohne Developer-ID-pflichtige Endpoint-Security-Erweiterung sieht er nicht jeden Prozess- oder Dateizugriff in Echtzeit. Auch legitime Admin- oder Intune-Änderungen können einen Befund auslösen. Vollständige Kontrolle über Benutzer, Schlüsselbund und MiddleAI selbst liegt außerhalb seines belastbaren Schutzmodells.</p>
+          </div>
+
+          <div class="monitor-cta reveal">
+            <div><span>Optional und vollständig lokal</span><strong>Aktiviere den Systemwächter in den MiddleAI-Einstellungen.</strong></div>
+            <div class="hero-actions">
+              <a class="button button-primary download-link" href="https://github.com/sschluet/middleai/releases/latest">MiddleAI laden</a>
+              <a class="button button-secondary" href="https://github.com/sschluet/middleai#local-system-integrity-monitor">Technische Dokumentation</a>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -441,7 +605,7 @@
           <p>Eine lokale Sprachschicht für macOS und deine private KI.</p>
         </div>
         <div class="footer-links">
-          <div><strong>Produkt</strong><a href="#features">Features</a><a href="#privacy">Datenschutz</a><a href="#requirements">Anforderungen</a></div>
+          <div><strong>Produkt</strong><a href="#features">Features</a><a href="#systemwaechter">Systemwächter</a><a href="#privacy">Datenschutz</a><a href="#requirements">Anforderungen</a></div>
           <div><strong>Projekt</strong><a href="https://github.com/sschluet/middleai">GitHub</a><a href="https://github.com/sschluet/middleai/releases">Releases</a><a href="https://github.com/sschluet/middleai/blob/main/LICENSE">Lizenz</a></div>
           <div><strong>Dokumentation</strong><a href="https://github.com/sschluet/middleai#first-start">Erste Schritte</a><a href="https://github.com/sschluet/middleai/blob/main/SECURITY.md">Sicherheit</a><a href="https://github.com/sschluet/middleai/issues">Support</a></div>
         </div>
