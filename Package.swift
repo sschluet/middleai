@@ -12,7 +12,7 @@ let package = Package(
     .executable(name: "middleai-tests", targets: ["MiddleAITestRunner"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.5")
+    .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.7")
   ],
   targets: [
     .systemLibrary(name: "CSQLite"),
