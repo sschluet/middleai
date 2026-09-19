@@ -2,6 +2,12 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.10.4 — 2026-09-19
+
+- Fixed microphone capture from USB speakerphones such as the Sennheiser SP30 when their native 16 kHz input format differs from AVAudioEngine's 48 kHz output graph.
+- Kept device-specific input selection while installing the capture tap with the freshly negotiated hardware format, avoiding Core Audio error `-10868`.
+- Added regression coverage for native 16 kHz mono USB input and invalid hardware formats.
+
 ## 0.10.3 — 2026-09-19
 
 - Fixed a launch crash when Voxtral TTS was enabled and the packaged SwiftPM resource bundle was loaded from a standard macOS application bundle.

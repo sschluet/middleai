@@ -104,6 +104,15 @@ private actor RecordingVoiceActionExecutor: VoiceActionExecuting {
 }
 
 final class AdaptiveSpeechRecognitionTests: XCTestCase {
+  func testNative16kMonoUSBInputFormatIsAccepted() {
+    XCTAssertTrue(
+      AudioCaptureFormatPolicy.isUsableHardwareInput(sampleRate: 16_000, channelCount: 1))
+    XCTAssertFalse(
+      AudioCaptureFormatPolicy.isUsableHardwareInput(sampleRate: 0, channelCount: 1))
+    XCTAssertFalse(
+      AudioCaptureFormatPolicy.isUsableHardwareInput(sampleRate: 48_000, channelCount: 0))
+  }
+
   func testLexiconIsScopedAndRequiresExplicitApproval() async throws {
     let store = try SpeechLexiconStore()
     _ = try await store.recordCorrection(

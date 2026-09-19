@@ -3,6 +3,13 @@ import MiddleAICore
 
 enum AudioTTSRegressionTests {
   static func testVoiceAccumulator() throws {
+    try expect(
+      AudioCaptureFormatPolicy.isUsableHardwareInput(sampleRate: 16_000, channelCount: 1),
+      "native 16 kHz mono USB input")
+    try expect(
+      !AudioCaptureFormatPolicy.isUsableHardwareInput(sampleRate: 0, channelCount: 1),
+      "invalid hardware input rate")
+
     var bounded = VoiceSampleAccumulator(targetSampleRate: 16_000, maximumDuration: 1)
     let source = (0..<48_000).map { index in
       Float(sin(Double(index) * 2 * .pi * 440 / 48_000))

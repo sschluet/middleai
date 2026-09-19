@@ -83,8 +83,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
     if deviceUID != AudioInputDeviceCatalog.systemDefaultUID, requestedDevice != nil {
       try AudioInputDeviceCatalog.apply(device, to: audioUnit)
     }
-    let availableFormat = input.outputFormat(forBus: 0)
-    guard availableFormat.sampleRate > 0, availableFormat.channelCount > 0 else {
+    let captureFormat = input.inputFormat(forBus: 0)
+    guard
+      AudioCaptureFormatPolicy.isUsableHardwareInput(
+        sampleRate: captureFormat.sampleRate,
+        channelCount: captureFormat.channelCount)
+    else {
       throw VoiceCaptureError.microphoneUnavailable
     }
 
@@ -100,10 +104,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
       lastLevelUptime = 0
     }
 
-    // Passing nil is intentional: AVAudioEngine chooses the input node's negotiated format at
-    // the instant the tap is installed. Constructing a mono format from an earlier query races
-    // devices such as USB speakerphones that renegotiate between 16, 44.1 and 48 kHz on start.
-    input.installTap(onBus: 0, bufferSize: 1_024, format: nil) { [weak self] buffer, _ in
+    // A pinned USB microphone can use a different hardware rate than the engine's default output
+    // graph. The SP30, for example, records mono at 16 kHz while AVAudioEngine otherwise installs
+    // a 48 kHz tap and fails with -10868. Use the freshly negotiated hardware input format; the
+    // bounded accumulator below already converts any supported source rate to 16 kHz.
+    input.installTap(onBus: 0, bufferSize: 1_024, format: captureFormat) {
+      [weak self] buffer, _ in
       guard let self else { return }
       let samples = Self.monoSamples(from: buffer)
       guard !samples.isEmpty else { return }
