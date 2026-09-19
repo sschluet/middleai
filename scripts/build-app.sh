@@ -32,6 +32,8 @@ for resource_bundle in "$bin_dir"/*.bundle(N); do
   bundle_name=${resource_bundle:t}
   cp -R "$resource_bundle" "$staging_app/Contents/Resources/$bundle_name"
 done
+[[ -s "$staging_app/Contents/Resources/MiddleAI_MiddleAICore.bundle/voxtral_runner.py" ]]
+[[ -s "$staging_app/Contents/Resources/MiddleAI_MiddleAICore.bundle/tts-runtime-requirements.txt" ]]
 chmod 755 "$staging_app/Contents/MacOS/MiddleAI"
 find "$staging_app/Contents/Resources" -type d -exec chmod 755 {} +
 find "$staging_app/Contents/Resources" -type f -exec chmod 644 {} +

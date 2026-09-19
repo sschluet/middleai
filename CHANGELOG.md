@@ -2,6 +2,12 @@
 
 All notable MiddleAI changes are documented here. Versions follow semantic versioning.
 
+## 0.10.3 — 2026-09-19
+
+- Fixed a launch crash when Voxtral TTS was enabled and the packaged SwiftPM resource bundle was loaded from a standard macOS application bundle.
+- Made missing packaged TTS resources fail with a recoverable configuration error instead of terminating MiddleAI with `SIGTRAP`.
+- Added regression coverage for packaged resource discovery and release-bundle validation.
+
 ## 0.10.2 — 2026-08-24
 
 - Removed the periodic `sfltool dumpbtm` collector after current macOS versions were confirmed to request `system.privilege.admin` and open a recurring SecurityAgent password dialog.

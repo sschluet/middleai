@@ -4,6 +4,42 @@ import XCTest
 @testable import MiddleAICore
 
 final class LocalRuntimeTests: XCTestCase {
+  func testPackagedCoreResourcesResolveFromMacOSResourcesDirectory() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "middleai-packaged-resources-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let bundle = directory.appendingPathComponent(
+      "MiddleAI_MiddleAICore.bundle", isDirectory: true)
+    try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+    try "runner".write(
+      to: bundle.appendingPathComponent("voxtral_runner.py"),
+      atomically: true,
+      encoding: .utf8)
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleDevelopmentRegion": "de"],
+      format: .xml,
+      options: 0
+    ).write(to: bundle.appendingPathComponent("Info.plist"), options: .atomic)
+
+    let resolved = MiddleAIResourceLocator.packagedURL(
+      forResource: "voxtral_runner",
+      withExtension: "py",
+      resourceDirectory: directory)
+
+    XCTAssertEqual(resolved?.lastPathComponent, "voxtral_runner.py")
+  }
+
+  func testMissingPackagedCoreResourceReturnsNil() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "middleai-missing-packaged-resources-\(UUID().uuidString)", isDirectory: true)
+
+    XCTAssertNil(
+      MiddleAIResourceLocator.packagedURL(
+        forResource: "voxtral_runner",
+        withExtension: "py",
+        resourceDirectory: directory))
+  }
+
   func testLocalAnswerProviderRoundTripAndFactory() throws {
     var config = AppConfig()
     config.assistant.provider = "local"

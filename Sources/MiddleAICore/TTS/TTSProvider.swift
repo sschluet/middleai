@@ -1125,7 +1125,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
       throw error
     }
     guard
-      let runnerURL = Bundle.module.url(
+      let runnerURL = MiddleAIResourceLocator.url(
         forResource: "voxtral_runner", withExtension: "py")
     else {
       isPreparing = false
@@ -1235,7 +1235,7 @@ extension MacOSTTSProvider: @preconcurrency AVSpeechSynthesizerDelegate {
         try await installUV(uv, root: root)
       }
       guard
-        let requirements = Bundle.module.url(
+        let requirements = MiddleAIResourceLocator.url(
           forResource: "tts-runtime-requirements", withExtension: "txt")
       else { throw MiddleAIError.configuration("Die gepinnte TTS-Laufzeitdefinition fehlt") }
 
